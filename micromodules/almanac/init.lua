@@ -24,7 +24,7 @@ card colour. These cards each have their own colour, so they fill their cell
 with a rounded panel and draw on that instead.
 ]]
 
-local A = { VERSION = "1.2.0", NAME = "Reading Log" }
+local A = { VERSION = "1.3.0", NAME = "Reading Log" }
 
 A.dir = (debug.getinfo(1, "S").source:match("^@(.*)/[^/]*$")) or "."
 
@@ -335,19 +335,38 @@ end
 
 local _colcache, _colmode, _colcount = {}, nil, 0
 
+-- Blitbuffer, loaded once (drawing asks for it a great many times).
+local _BB
+local function BBmod()
+    if not _BB then _BB = require("ffi/blitbuffer") end
+    return _BB
+end
+
+-- Whether the screen shows colour. Asked of the screen at the start of each
+-- paint (see Canvas:paintTo) and kept, instead of once per colour.
+local _is_color, _is_color_known = false, false
+function A.colorMode(refresh)
+    if refresh or not _is_color_known then
+        local Screen = A.screen()
+        _is_color = (Screen.isColorEnabled and Screen:isColorEnabled()) and true or false
+        _is_color_known = true
+    end
+    return _is_color
+end
+
 function A.color(rgb, inv)
-    local Blitbuffer = require("ffi/blitbuffer")
-    local Screen = A.screen()
-    local is_color = Screen.isColorEnabled and Screen:isColorEnabled() or false
+    local is_color
+    if _is_color_known then is_color = _is_color else is_color = A.colorMode() end
     -- Edge blending makes many one-off shades; start over now and then.
     if _colmode ~= is_color or _colcount > 8192 then _colcache, _colmode, _colcount = {}, is_color, 0 end
-    local r = A.clamp(floor(rgb[1] + 0.5), 0, 255)
-    local g = A.clamp(floor(rgb[2] + 0.5), 0, 255)
-    local b = A.clamp(floor(rgb[3] + 0.5), 0, 255)
+    local r = floor(rgb[1] + 0.5); if r < 0 then r = 0 elseif r > 255 then r = 255 end
+    local g = floor(rgb[2] + 0.5); if g < 0 then g = 0 elseif g > 255 then g = 255 end
+    local b = floor(rgb[3] + 0.5); if b < 0 then b = 0 elseif b > 255 then b = 255 end
     if inv then r, g, b = 255 - r, 255 - g, 255 - b end
     local key = r * 65536 + g * 256 + b
     local c = _colcache[key]
     if c then return c end
+    local Blitbuffer = _BB or BBmod()
     if is_color and Blitbuffer.ColorRGB32 then
         c = Blitbuffer.ColorRGB32(r, g, b, 0xFF)
     else
@@ -362,7 +381,7 @@ end
 -- KOReader's own FrameContainer makes.
 local function fillRect(bb, x, y, w, h, c)
     if w <= 0 or h <= 0 then return end
-    local Blitbuffer = require("ffi/blitbuffer")
+    local Blitbuffer = _BB or BBmod()
     if bb.paintRectRGB32 and Blitbuffer.isColor8 and not Blitbuffer.isColor8(c) then
         bb:paintRectRGB32(x, y, w, h, c)
     else
@@ -397,7 +416,27 @@ function G.rect(bb, x, y, w, h, rgb, inv)
     fillRect(bb, floor(x), floor(y), floor(w), floor(h), A.color(rgb, inv))
 end
 
--- Filled rounded rectangle. `under` = colour behind it, for the corner edges.
+-- `under` for a shape whose edges should blend with whatever is really
+-- behind it (a picture showing through), read from the bitmap: a card over a
+-- wallpaper. Used for card outlines only; everything inside a card blends
+-- with the card's own colour as before.
+A.BEHIND = { behind = true }
+local BEHIND = A.BEHIND
+
+-- Blend colour rgb (to be painted, night mode applied) by coverage cov over
+-- the pixel already at x, y.
+local function plotOver(bb, bw, bh, x, y, rgb, cov)
+    if x < 0 or y < 0 or x >= bw or y >= bh then return end
+    local ok, r, g, b = pcall(function()
+        local c = bb:getPixel(x, y):getColorRGB32()
+        return c.r, c.g, c.b
+    end)
+    if not ok then return end
+    bb:setPixel(x, y, A.color({ r + (rgb[1] - r) * cov, g + (rgb[2] - g) * cov, b + (rgb[3] - b) * cov }, false))
+end
+
+-- Filled rounded rectangle. `under` = colour behind it, for the corner edges
+-- (or BEHIND).
 function G.rrect(bb, x, y, w, h, r, rgb, under, inv)
     x, y, w, h = floor(x), floor(y), floor(w), floor(h)
     if w <= 0 or h <= 0 then return end
@@ -417,7 +456,13 @@ function G.rrect(bb, x, y, w, h, r, rgb, under, inv)
             fillRect(bb, x + full, yt, span, 1, c)
             fillRect(bb, x + full, yb, span, 1, c)
         end
-        if under and cov > 0.02 and full >= 1 then
+        if under == BEHIND and cov > 0.02 and full >= 1 then
+            local paint = inv and A.inverted(rgb) or rgb
+            plotOver(bb, bw, bh, x + full - 1, yt, paint, cov)
+            plotOver(bb, bw, bh, x + w - full, yt, paint, cov)
+            plotOver(bb, bw, bh, x + full - 1, yb, paint, cov)
+            plotOver(bb, bw, bh, x + w - full, yb, paint, cov)
+        elseif under and cov > 0.02 and full >= 1 then
             local e = A.color(A.mix(under, rgb, cov), inv)
             plot(bb, bw, bh, x + full - 1, yt, e)
             plot(bb, bw, bh, x + w - full, yt, e)
@@ -588,6 +633,812 @@ function G.ring(bb, cx, cy, R, t, frac, track, fill, under, inv)
     end
 end
 
+-- Hearts and flowers are worked out pixel by pixel, which is slow next to a
+-- ring. So each one is worked out once as runs of one colour along its rows
+-- (most of a shape is flat colour), kept, and painted again from those runs
+-- while nothing about it changes: the home screen redraws far more often
+-- than you read a page. A run is x, y (from the shape's centre), length and
+-- colour; a heart is a few hundred runs, a big flower a few thousand.
+local _shapes, _shape_n, _shape_tick = {}, 0, 0
+local SHAPE_MAX = 160
+
+local function shapeRuns(key, render)
+    _shape_tick = _shape_tick + 1
+    local hit = _shapes[key]
+    if hit then hit.used = _shape_tick return hit end
+    local ffi = require("ffi")
+    local cap, n = 512, 0
+    local xs, ys = ffi.new("int16_t[?]", cap), ffi.new("int16_t[?]", cap)
+    local ls, ks = ffi.new("int16_t[?]", cap), ffi.new("int32_t[?]", cap)
+    local function push(x, y, len, k)
+        if n >= cap then
+            local nc = cap * 2
+            local nx, ny = ffi.new("int16_t[?]", nc), ffi.new("int16_t[?]", nc)
+            local nl, nk = ffi.new("int16_t[?]", nc), ffi.new("int32_t[?]", nc)
+            ffi.copy(nx, xs, 2 * cap); ffi.copy(ny, ys, 2 * cap)
+            ffi.copy(nl, ls, 2 * cap); ffi.copy(nk, ks, 4 * cap)
+            xs, ys, ls, ks, cap = nx, ny, nl, nk, nc
+        end
+        xs[n], ys[n], ls[n], ks[n] = x, y, len, k
+        n = n + 1
+    end
+    -- pixels come in left to right, row by row
+    local run_k, run_x, run_y, run_n = -1, 0, 0, 0
+    local rec = {}
+    function rec.flush()
+        if run_n > 0 then push(run_x, run_y, run_n, run_k) end
+        run_k, run_n = -1, 0
+    end
+    -- len pixels of one colour from px (put = one pixel)
+    function rec.run(px, py, len, r, g, b)
+        local r8 = floor(r + 0.5); r8 = r8 < 0 and 0 or (r8 > 255 and 255 or r8)
+        local g8 = floor(g + 0.5); g8 = g8 < 0 and 0 or (g8 > 255 and 255 or g8)
+        local b8 = floor(b + 0.5); b8 = b8 < 0 and 0 or (b8 > 255 and 255 or b8)
+        local k = r8 * 65536 + g8 * 256 + b8
+        if k == run_k and py == run_y and run_x + run_n == px then
+            run_n = run_n + len
+        else
+            rec.flush()
+            run_k, run_x, run_y, run_n = k, px, py, len
+        end
+    end
+    function rec.put(px, py, r, g, b) return rec.run(px, py, 1, r, g, b) end
+    render(rec)
+    rec.flush()
+    hit = { n = n, xs = xs, ys = ys, ls = ls, ks = ks, used = _shape_tick }
+    if _shape_n >= SHAPE_MAX then
+        -- full: let go of the half used longest ago (not all of them, which
+        -- would mean working every heart and flower out again at once)
+        local ticks = {}
+        for _, e in pairs(_shapes) do ticks[#ticks + 1] = e.used end
+        table.sort(ticks)
+        local cut = ticks[floor(#ticks / 2)] or 0
+        for k, e in pairs(_shapes) do
+            if e.used <= cut then _shapes[k] = nil; _shape_n = _shape_n - 1 end
+        end
+    end
+    _shapes[key] = hit
+    _shape_n = _shape_n + 1
+    return hit
+end
+
+-- Paint kept runs with their centre at ox, oy, clipped to the bitmap. The
+-- Blitbuffer colour of each run colour is worked out once and kept with the
+-- runs (per night-mode inversion and colour mode).
+local function paintRuns(bb, runs, ox, oy, inv)
+    local bw, bh = bb:getWidth(), bb:getHeight()
+    local scratch = { 0, 0, 0 }
+    local xs, ys, ls, ks = runs.xs, runs.ys, runs.ls, runs.ks
+    local mode = (inv and "i" or "n") .. (A.colorMode() and "c" or "g")
+    local memo = runs[mode]
+    if not memo then memo = {}; runs[mode] = memo end
+    local last_k, col = -1, nil
+    local Blitbuffer = _BB or BBmod()
+    local rgb32 = bb.paintRectRGB32 and Blitbuffer.isColor8 and true or false
+    for i = 0, runs.n - 1 do
+        local y = oy + ys[i]
+        if y >= 0 and y < bh then
+            local x, len = ox + xs[i], ls[i]
+            if x < 0 then len = len + x; x = 0 end
+            if x + len > bw then len = bw - x end
+            if len > 0 then
+                local k = ks[i]
+                if k ~= last_k then
+                    col = memo[k]
+                    if not col then
+                        scratch[1], scratch[2], scratch[3] = floor(k / 65536), floor(k / 256) % 256, k % 256
+                        col = A.color(scratch, inv)
+                        memo[k] = col
+                    end
+                    last_k = k
+                end
+                if rgb32 and not Blitbuffer.isColor8(col) then
+                    bb:paintRectRGB32(x, y, len, 1, col)
+                else
+                    bb:paintRect(x, y, len, 1, col)
+                end
+            end
+        end
+    end
+end
+A._shapeCount = function() return _shape_n end
+
+local function rgbKey(c) return c and (c[1] .. "," .. c[2] .. "," .. c[3]) or "-" end
+
+-- ─── hearts ──────────────────────────────────────────────────────────────────
+-- The heart is Inigo Quilez's exact distance function for a heart (tip at
+-- (0, 0), the dip between the lobes at (0, 1), y upwards), rounded a little.
+-- Being a distance, it gives smooth edges and an outline of any thickness.
+
+local SQ2_4 = sqrt(2) / 4
+local function sdHeart(x, y)
+    if x < 0 then x = -x end
+    if y + x > 1 then
+        local dx, dy = x - 0.25, y - 0.75
+        return sqrt(dx * dx + dy * dy) - SQ2_4
+    end
+    local ay = y - 1
+    local d1 = x * x + ay * ay
+    local m = (x + y > 0) and 0.5 * (x + y) or 0
+    local bx, by = x - m, y - m
+    local d2 = bx * bx + by * by
+    local d = sqrt(d1 < d2 and d1 or d2)
+    if x > y then return d elseif x < y then return -d end
+    return 0
+end
+A.sdHeart = sdHeart
+
+local HEART_R = 0.07                                  -- rounding, in heart units
+local HEART_W, HEART_H = 1.2071 + 2 * HEART_R, 1.1036 + 2 * HEART_R
+local HEART_MID = 1.1036 / 2                          -- the middle of the box, from the tip
+local INNER_K, INNER_Y = 0.5, 0.31                    -- the inner heart: its size and where its tip sits
+-- the crack of a broken heart, top to bottom: { y, x }
+local CRACK = { { 1.2, 0.0 }, { 1.0, 0.0 }, { 0.82, -0.08 }, { 0.62, 0.07 }, { 0.42, -0.06 }, { 0.22, 0.03 }, { -0.2, 0.0 } }
+local function crackX(y)
+    if y >= CRACK[1][1] then return 0 end
+    for i = 2, #CRACK do
+        local a, b = CRACK[i - 1], CRACK[i]
+        if y >= b[1] then return b[2] + (a[2] - b[2]) * (y - b[1]) / (a[1] - b[1]) end
+    end
+    return 0
+end
+A.HEART_ASPECT = HEART_W / HEART_H
+
+-- How full each part of the heart is, as a level from the tip: the level
+-- that leaves `frac` of its area under it, so half full looks half full.
+-- Worked out once per size (all of a month's hearts share one).
+local _levels = {}
+local function heartLevels(S, t, gap, nested)
+    local key = floor(S * 100) .. ":" .. floor(t * 10) .. ":" .. floor(gap * 10) .. ":" .. tostring(nested)
+    local hit = _levels[key]
+    if hit then return hit end
+    local rows = ceil(HEART_H * S)
+    local cols = ceil(HEART_W * S)
+    local band, inner = {}, {}
+    local tot_b, tot_i = 0, 0
+    for j = 0, rows - 1 do
+        local hy = -HEART_R + (j + 0.5) / S
+        local nb, ni = 0, 0
+        for k = 0, cols - 1 do
+            local hx = -HEART_W / 2 + (k + 0.5) / S
+            local d_o = (sdHeart(hx, hy) - HEART_R) * S
+            if d_o < -t then
+                if nested then
+                    local d_i = (sdHeart(hx / INNER_K, (hy - INNER_Y) / INNER_K) - HEART_R) * INNER_K * S
+                    if d_i < -t then ni = ni + 1 elseif d_i > gap then nb = nb + 1 end
+                else
+                    nb = nb + 1
+                end
+            end
+        end
+        tot_b, tot_i = tot_b + nb, tot_i + ni
+        band[j + 1], inner[j + 1] = tot_b, tot_i
+    end
+    hit = { band = band, inner = inner, tot_b = tot_b, tot_i = tot_i, rows = rows }
+    local n = 0
+    for _ in pairs(_levels) do n = n + 1 end
+    if n >= 12 then _levels = {} end
+    _levels[key] = hit
+    return hit
+end
+
+-- frac of the area -> the level (heart units from the tip) it reaches
+local function levelFor(cum, total, rows, S, frac)
+    frac = tonumber(frac) or 0
+    if frac ~= frac or frac <= 0 or total <= 0 then return -math.huge end
+    if frac >= 1 then return math.huge end
+    local want = frac * total
+    local prev = 0
+    for j = 1, rows do
+        local cur = cum[j]
+        if cur >= want then
+            local part = (cur > prev) and (want - prev) / (cur - prev) or 1
+            return -HEART_R + (j - 1 + part) / S
+        end
+        prev = cur
+    end
+    return math.huge
+end
+
+-- A heart filling up like a glass, in a box w x h centred on cx, cy.
+-- o = { outer = 0..1 (how full), inner = 0..1 or nil (a second heart inside),
+--       line = outline colour, line_in = the inner heart's outline colour,
+--       fill, fill_in = their fill colours (default: the outline colours),
+--       track = colour of what's still empty, t = outline px, gap = px between
+--       the hearts, broken = split in two along a crack }
+function G.heart(bb, cx, cy, w, h, o, under, inv)
+    local S = min(w / HEART_W, h / HEART_H)
+    if not (S > 2 and S < 4096 and cx == cx and cy == cy) then return end
+    local nested = o.inner ~= nil
+    local t = max(1, o.t or S * 0.06)
+    local gap = max(1, o.gap or S * 0.05)
+    local lv = heartLevels(S, t, gap, nested)
+    local lev_o = levelFor(lv.band, lv.tot_b, lv.rows, S, o.outer)
+    local lev_i = nested and levelFor(lv.inner, lv.tot_i, lv.rows, S, o.inner) or 0
+    local tr, tg, tb = o.track[1], o.track[2], o.track[3]
+    local lo = o.line
+    local fo = o.fill or lo
+    local li = o.line_in or lo
+    local fi = o.fill_in or li
+    local ur, ug, ub = under[1], under[2], under[3]
+    local broken = o.broken
+    local ca, sa, shift, half_gap = 1, 0, 0, 0
+    if broken then
+        local a = 0.085
+        ca, sa = math.cos(a), math.sin(a)
+        shift = 0
+        half_gap = max(0.02, 1.1 / S)
+    end
+    local ox, oy = floor(cx), floor(cy)
+    local key = table.concat({ "h", floor(S * 1000), floor(t * 100), floor(gap * 100), tostring(o.outer), tostring(o.inner),
+        tostring(broken), rgbKey(o.track), rgbKey(lo), rgbKey(fo), rgbKey(li), rgbKey(fi), rgbKey(under),
+        floor((cx - ox) * 100), floor((cy - oy) * 100) }, "|")
+    local hw, hh = HEART_W * S / 2 + 2, HEART_H * S / 2 + 2
+    if broken then hw, hh = hw + S * 0.2, hh + S * 0.05 end
+    local x0, x1 = floor(cx - hw), ceil(cx + hw)
+    local y0, y1 = floor(cy - hh), ceil(cy + hh)
+
+    -- the colour at a point of the heart (heart units), and how much of the
+    -- pixel the heart covers
+    -- the inner heart and the gap around it, as a box: outside it, no need to ask
+    local pad_u = (gap + 2) / S
+    local ix0, ix1 = -(HEART_W / 2) * INNER_K - pad_u, (HEART_W / 2) * INNER_K + pad_u
+    local iy0, iy1 = INNER_Y - HEART_R * INNER_K - pad_u, INNER_Y + (HEART_H - HEART_R) * INNER_K + pad_u
+    local function shade(hx, hy)
+        local d_o = (sdHeart(hx, hy) - HEART_R) * S
+        local cov = 0.5 - d_o
+        if cov <= 0 then return nil end
+        if cov > 1 then cov = 1 end
+        local f = (lev_o - hy) * S + 0.5
+        f = f < 0 and 0 or (f > 1 and 1 or f)
+        local r, g, b = tr + (fo[1] - tr) * f, tg + (fo[2] - tg) * f, tb + (fo[3] - tb) * f
+        if nested and hx > ix0 and hx < ix1 and hy > iy0 and hy < iy1 then
+            local d_i = (sdHeart(hx / INNER_K, (hy - INNER_Y) / INNER_K) - HEART_R) * INNER_K * S
+            if d_i < gap + 1 then
+                local fi_ = (lev_i - hy) * S + 0.5
+                fi_ = fi_ < 0 and 0 or (fi_ > 1 and 1 or fi_)
+                local ir, ig, ib = tr + (fi[1] - tr) * fi_, tg + (fi[2] - tg) * fi_, tb + (fi[3] - tb) * fi_
+                local kl = d_i + t + 0.5
+                kl = kl < 0 and 0 or (kl > 1 and 1 or kl)
+                ir, ig, ib = ir + (li[1] - ir) * kl, ig + (li[2] - ig) * kl, ib + (li[3] - ib) * kl
+                local kin = 0.5 - d_i
+                kin = kin < 0 and 0 or (kin > 1 and 1 or kin)
+                local gr, gg, gb = ur + (ir - ur) * kin, ug + (ig - ug) * kin, ub + (ib - ub) * kin
+                local kb = d_i - gap + 0.5
+                kb = kb < 0 and 0 or (kb > 1 and 1 or kb)
+                r, g, b = gr + (r - gr) * kb, gg + (g - gg) * kb, gb + (b - gb) * kb
+            end
+        end
+        local kl = d_o + t + 0.5
+        kl = kl < 0 and 0 or (kl > 1 and 1 or kl)
+        return r + (lo[1] - r) * kl, g + (lo[2] - g) * kl, b + (lo[3] - b) * kl, cov
+    end
+
+    local runs = shapeRuns(key, function(paint)
+        for py = y0, y1 do
+            local qy = HEART_MID + (cy - (py + 0.5)) / S
+            for px = x0, x1 do
+                local qx = (px + 0.5 - cx) / S
+                local r, g, b, cov
+                if broken then
+                    -- each half tipped outwards about the tip, a gap along the crack
+                    local lx, ly = qx + shift, qy
+                    lx, ly = lx * ca + ly * sa, -lx * sa + ly * ca
+                    local rx, ry = qx - shift, qy
+                    rx, ry = rx * ca - ry * sa, rx * sa + ry * ca
+                    -- the crack narrows to nothing at the tip
+                    local gl = half_gap * min(1, max(0, ly / 0.6))
+                    local gr_ = half_gap * min(1, max(0, ry / 0.6))
+                    local kl = (crackX(ly) - gl - lx) * S + 0.5
+                    local kr = (rx - crackX(ry) - gr_) * S + 0.5
+                    if kl >= kr and kl > 0 then
+                        r, g, b, cov = shade(lx, ly)
+                        if cov and kl < 1 then cov = cov * kl end
+                    elseif kr > 0 then
+                        r, g, b, cov = shade(rx, ry)
+                        if cov and kr < 1 then cov = cov * kr end
+                    end
+                else
+                    r, g, b, cov = shade(qx, qy)
+                end
+                if cov and cov > 0.004 then
+                    if cov < 1 then r, g, b = ur + (r - ur) * cov, ug + (g - ug) * cov, ub + (b - ub) * cov end
+                    paint.put(px - ox, py - oy, r, g, b)
+                end
+            end
+            paint.flush()
+        end
+    end)
+    paintRuns(bb, runs, ox, oy, inv)
+end
+
+-- ─── a flower ────────────────────────────────────────────────────────────────
+-- A peony from the front: ten big petals round the outside, eight in the
+-- middle, six small ones and a heart in the centre, with two leaves behind.
+-- `frac` colours it in petal by petal, from the centre outwards and clockwise
+-- from the top; the rest stay outlines, like a colouring page.
+
+local FLOWER_RINGS = {   -- inside out: petals, where each petal's middle sits, half its length and width (x R)
+    { n = 6, c = 0.25, a = 0.21, b = 0.15, turn = 0, first = 1 },
+    { n = 8, c = 0.40, a = 0.30, b = 0.21, turn = 0.5, first = 7 },
+    { n = 10, c = 0.56, a = 0.41, b = 0.27, turn = 0, first = 15 },
+}
+local FLOWER_CORE = 0.15
+local FLOWER_UNITS = 25
+local FLOWER_LEAVES = { { ang = math.rad(155), r0 = 0.3, len = 0.88, wid = 0.24 },
+                        { ang = math.rad(25), r0 = 0.3, len = 0.88, wid = 0.24 } }
+local SPARKLES = { { 0.92, -0.8, 0.13 }, { -0.95, -0.62, 0.09 }, { 1.02, -0.38, 0.07 } }
+A.FLOWER_UNITS = FLOWER_UNITS
+
+-- o = { frac, fills = { inner, middle, outer, core } (petal colours), line
+--       (outline of a coloured petal), empty_line, empty (inside a petal not
+--       coloured yet), leaf, leaf_line, sparkle (drawn round it when full) }
+function G.flower(bb, cx, cy, R, o, under, inv)
+    if not (R > 4 and R < 4096 and cx == cx and cy == cy) then return end
+    local frac = tonumber(o.frac) or 0
+    if frac ~= frac then frac = 0 end
+    local units = A.clamp(frac, 0, 1) * FLOWER_UNITS
+    local t = max(1, R * 0.028)
+    local ur, ug, ub = under[1], under[2], under[3]
+    local line, eline, empty = o.line, o.empty_line, o.empty
+    local er, eg, eb = empty[1], empty[2], empty[3]
+    local leaf, leaf_line = o.leaf, o.leaf_line
+    local spc = (frac >= 1) and o.sparkle or nil
+    local PI = math.pi
+    local atan2, cos, sin, abs = math.atan2, math.cos, math.sin, math.abs
+    local function clamp01(v) return v < 0 and 0 or (v > 1 and 1 or v) end
+    -- each ring's petals: the angle of each (as cos, sin) and how coloured it is
+    local rings = {}
+    for k, rg in ipairs(FLOWER_RINGS) do
+        local step = 2 * PI / rg.n
+        local list = {}
+        for j = 0, rg.n - 1 do
+            local phi = -PI / 2 + (rg.turn + j) * step
+            list[j] = { cos(phi), sin(phi), A.clamp(units - (rg.first + j), 0, 1) }
+        end
+        rings[k] = { n = rg.n, turn = rg.turn, step = step, list = list, A = rg.a * R, B = rg.b * R, C = rg.c * R,
+            reach = (rg.c + rg.a) * R + 2, fill = o.fills[k] }
+    end
+    local L1 = FLOWER_LEAVES[1]
+    local L2 = FLOWER_LEAVES[2]
+    local lc1, ls1, lc2, ls2 = cos(L1.ang), sin(L1.ang), cos(L2.ang), sin(L2.ang)
+    local l_r0, l_len, l_wid = L1.r0 * R, L1.len * R, L1.wid * R
+    local core_f = A.clamp(units, 0, 1)
+    local core_r = FLOWER_CORE * R
+    local core_fill = o.fills[4]
+
+    -- the colour of the pixel so far (kept here, not returned: LuaJIT
+    -- compiles that far better than three values handed back and forth)
+    local r, g, b = 0, 0, 0
+    -- one petal over the colour so far
+    local function petal(ring, pt, dx, dy)
+        local A_, B_ = ring.A, ring.B
+        local u = dx * pt[1] + dy * pt[2] - ring.C
+        local v = -dx * pt[2] + dy * pt[1]
+        local un, vn = u / A_, v / B_
+        local q2 = un * un + vn * vn
+        if q2 > 1.5 then return end
+        local q = sqrt(q2)
+        -- a ruffled edge at the tip
+        local thr = 1
+        if un > 0 and q > 0 then
+            local w = un / q
+            thr = 1 - 0.08 * w * w * (0.5 - 0.5 * cos(7 * atan2(vn, un)))
+        end
+        local ga, gb = un / A_, vn / B_
+        local grad = sqrt(ga * ga + gb * gb)
+        local d = (q > 0 and grad > 0) and (q - thr) * q / grad or -B_
+        local cov = 0.5 - d
+        if cov <= 0 then return end
+        if cov > 1 then cov = 1 end
+        local f = pt[3]
+        local pr, pg, pb, l
+        if f > 0 then
+            local fill = ring.fill
+            -- coloured in from the tip, the part that shows
+            local kf = f >= 1 and 1 or clamp01(f * 2 * A_ - (A_ - u) + 0.5)
+            pr, pg, pb = er + (fill[1] - er) * kf, eg + (fill[2] - eg) * kf, eb + (fill[3] - eb) * kf
+            l = line
+        else
+            pr, pg, pb = er, eg, eb
+            l = eline
+        end
+        local kl = clamp01(d + t + 0.5)
+        pr, pg, pb = pr + (l[1] - pr) * kl, pg + (l[2] - pg) * kl, pb + (l[3] - pb) * kl
+        r, g, b = r + (pr - r) * cov, g + (pg - g) * cov, b + (pb - b) * cov
+    end
+
+    -- one leaf (along cos, sin) over the colour so far
+    local function leafAt(lc, ls, dx, dy)
+        local u = dx * lc + dy * ls - l_r0
+        if u < -2 or u > l_len + 2 then return end
+        local v = -dx * ls + dy * lc
+        local uu = u < 0 and 0 or (u > l_len and l_len or u)
+        local wv = l_wid * sin(PI * uu / l_len)
+        local av = abs(v)
+        if av > wv + 2 and u >= 0 and u <= l_len then return end
+        local slope = l_wid * PI / l_len * cos(PI * uu / l_len)
+        local d = (av - wv) / sqrt(1 + slope * slope)
+        if u < 0 then d = max(d, -u) elseif u > l_len then d = max(d, u - l_len) end
+        local cov = 0.5 - d
+        if cov <= 0 then return end
+        if cov > 1 then cov = 1 end
+        local kl = clamp01(d + t + 0.5)
+        -- the vein down the middle
+        if u > l_len * 0.06 and u < l_len * 0.82 then
+            local vein = clamp01(t * 0.45 - av + 0.5)
+            if vein > kl then kl = vein end
+        end
+        local lr = leaf[1] + (leaf_line[1] - leaf[1]) * kl
+        local lg = leaf[2] + (leaf_line[2] - leaf[2]) * kl
+        local lb = leaf[3] + (leaf_line[3] - leaf[3]) * kl
+        r, g, b = r + (lr - r) * cov, g + (lg - g) * cov, b + (lb - b) * cov
+    end
+
+    local reach = R * 1.24
+    local ox, oy = floor(cx), floor(cy)
+    local f = o.fills
+    local key = table.concat({ "f", floor(R * 100), floor(units * 1000), rgbKey(f[1]), rgbKey(f[2]), rgbKey(f[3]), rgbKey(f[4]),
+        rgbKey(line), rgbKey(eline), rgbKey(empty), rgbKey(leaf), rgbKey(leaf_line), rgbKey(spc), rgbKey(under),
+        floor((cx - ox) * 100), floor((cy - oy) * 100) }, "|")
+    local x0, x1 = floor(cx - reach), ceil(cx + reach)
+    local y0, y1 = floor(cy - reach), ceil(cy + reach)
+    local petal_reach = rings[#rings].reach
+    local runs = shapeRuns(key, function(paint)
+        for py = y0, y1 do
+            local dy = py + 0.5 - cy
+            for px = x0, x1 do
+                local dx = px + 0.5 - cx
+                local rr = sqrt(dx * dx + dy * dy)
+                r, g, b = ur, ug, ub
+                -- the leaves, behind everything
+                if dy > -l_wid then
+                    leafAt(lc1, ls1, dx, dy)
+                    leafAt(lc2, ls2, dx, dy)
+                end
+                -- the petals, outside in; of each ring, the two either side of
+                -- this point, each lying over the one before it
+                if rr < petal_reach then
+                    local theta = atan2(dy, dx)
+                    for k = #rings, 1, -1 do
+                        local ring = rings[k]
+                        if rr <= ring.reach then
+                            local n = ring.n
+                            local j0 = floor((theta + PI / 2) / ring.step - ring.turn)
+                            petal(ring, ring.list[j0 % n], dx, dy)
+                            petal(ring, ring.list[(j0 + 1) % n], dx, dy)
+                        end
+                    end
+                    -- the heart of the flower: fills from the bottom up
+                    if rr < core_r + 1.5 then
+                        local d = rr - core_r
+                        local cov = clamp01(0.5 - d)
+                        local kf = core_f >= 1 and 1 or (core_f <= 0 and 0 or clamp01(core_f * 2 * core_r - (core_r - dy) + 0.5))
+                        local cr = er + (core_fill[1] - er) * kf
+                        local cg = eg + (core_fill[2] - eg) * kf
+                        local cb = eb + (core_fill[3] - eb) * kf
+                        local l = core_f > 0 and line or eline
+                        local kl = clamp01(d + t + 0.5)
+                        cr, cg, cb = cr + (l[1] - cr) * kl, cg + (l[2] - cg) * kl, cb + (l[3] - cb) * kl
+                        r, g, b = r + (cr - r) * cov, g + (cg - g) * cov, b + (cb - b) * cov
+                    end
+                end
+                -- a finished flower sparkles
+                if spc then
+                    for i = 1, #SPARKLES do
+                        local sp = SPARKLES[i]
+                        local sx, sy, sr = abs(dx - sp[1] * R), abs(dy - sp[2] * R), sp[3] * R
+                        if sx < sr + 1 and sy < sr + 1 then
+                            local e = (sqrt(sx) + sqrt(sy)) / sqrt(sr)
+                            local cov = clamp01((1 - e) * sr * 0.6 + 0.5)
+                            if cov > 0 then r, g, b = r + (spc[1] - r) * cov, g + (spc[2] - g) * cov, b + (spc[3] - b) * cov end
+                        end
+                    end
+                end
+                if r ~= ur or g ~= ug or b ~= ub then paint.put(px - ox, py - oy, r, g, b) end
+            end
+            paint.flush()
+        end
+    end)
+    paintRuns(bb, runs, ox, oy, inv)
+end
+
+-- ─── little drawings ─────────────────────────────────────────────────────────
+-- A small picture made of a few smooth parts (ellipses, leaves, thick
+-- strokes), each with a fill and an outline, painted back to front: the
+-- dragonfly, the leaves and flowers of the book club's garden. Parts are in
+-- units of `size` around the picture's centre, turned by `turn` radians.
+--   { "e", x, y, a, b, rot, fill, line }   ellipse, half-axes a (along rot) and b
+--   { "v", x, y, len, wid, rot, fill, line, vein }  leaf from (x, y) towards rot
+--   { "s", x1, y1, x2, y2, r, fill }       stroke with round ends, no outline
+--   { "*", x, y, r, fill }                 a four-pointed sparkle, no outline
+--   { "r", x, y, hw, hh, rot, radius, fill, line }  rectangle, round corners
+--   { "t", x1, y1, x2, y2, x3, y3, fill, line }       triangle
+-- o = { lw = outline px, halo = px of sticker edge round the whole thing,
+--       halo_col = its colour }
+
+local function partKey(parts)
+    local out = {}
+    for i, p in ipairs(parts) do
+        local f = {}
+        for j, v in ipairs(p) do
+            f[j] = type(v) == "table" and rgbKey(v) or (type(v) == "number" and string.format("%.3f", v) or tostring(v))
+        end
+        out[i] = table.concat(f, ",")
+    end
+    return table.concat(out, ";")
+end
+
+function G.sprite(bb, cx, cy, size, turn, parts, o, under, inv)
+    if not (size > 1 and size < 4096 and cx == cx and cy == cy) or #parts == 0 then return end
+    o = o or {}
+    local lw = max(1, o.lw or size * 0.05)
+    local halo = o.halo or 0
+    local hcol = o.halo_col or under
+    local ox, oy = floor(cx), floor(cy)
+    local key = table.concat({ "s", floor(size * 100), floor((turn or 0) * 1000), floor(lw * 10), floor(halo * 10),
+        rgbKey(hcol), rgbKey(under), floor((cx - ox) * 100), floor((cy - oy) * 100), partKey(parts) }, "|")
+    -- how far the picture reaches from its centre
+    local ext = 0
+    for _, p in ipairs(parts) do
+        local e
+        if p[1] == "e" then e = sqrt(p[2] * p[2] + p[3] * p[3]) + max(p[4], p[5])
+        elseif p[1] == "v" then e = sqrt(p[2] * p[2] + p[3] * p[3]) + p[4]
+        elseif p[1] == "*" then e = sqrt(p[2] * p[2] + p[3] * p[3]) + p[4]
+        elseif p[1] == "r" then e = sqrt(p[2] * p[2] + p[3] * p[3]) + sqrt(p[4] * p[4] + p[5] * p[5])
+        elseif p[1] == "t" then
+            e = max(sqrt(p[2] * p[2] + p[3] * p[3]), sqrt(p[4] * p[4] + p[5] * p[5]), sqrt(p[6] * p[6] + p[7] * p[7]))
+        else e = max(sqrt(p[2] * p[2] + p[3] * p[3]), sqrt(p[4] * p[4] + p[5] * p[5])) + p[6] end
+        if e > ext then ext = e end
+    end
+    local reach = ext * size + halo + 2
+    local ct, st = math.cos(turn or 0), math.sin(turn or 0)
+    local PI = math.pi
+    local n = #parts
+    -- each part's rotation, worked out once
+    local rc, rs = {}, {}
+    for i, p in ipairs(parts) do
+        local r = (p[1] == "e" or p[1] == "v" or p[1] == "r") and p[6] or 0
+        rc[i], rs[i] = math.cos(r), math.sin(r)
+    end
+    local ur, ug, ub = under[1], under[2], under[3]
+    local dist = {}
+    local HUGE = math.huge
+    -- Where each part can show at all, as a box on screen (with room for the
+    -- outline, the sticker edge and the approximate distances): pixels
+    -- outside every box are never worked out. A rectangle part also knows,
+    -- row by row, the stretch deep inside it that is plain fill.
+    local function toPx(lx, ly)
+        return cx + (lx * ct - ly * st) * size - 0.5, cy + (lx * st + ly * ct) * size - 0.5
+    end
+    local bx0, bx1, by0, by1 = {}, {}, {}, {}
+    local deep = {}
+    local pad = halo + lw + 3
+    for i, p in ipairs(parts) do
+        local kind = p[1]
+        local xs_, ys_, grow = {}, {}, pad
+        local function at(lx, ly) local X, Y = toPx(lx, ly); xs_[#xs_ + 1], ys_[#ys_ + 1] = X, Y end
+        if kind == "r" then
+            for _, sx in ipairs({ -1, 1 }) do
+                for _, sy in ipairs({ -1, 1 }) do
+                    local u, v = sx * p[4], sy * p[5]
+                    at(p[2] + u * rc[i] - v * rs[i], p[3] + u * rs[i] + v * rc[i])
+                end
+            end
+            local m = (lw + 1.5) / size
+            local U, V = p[4] - p[7] - m, p[5] - p[7] - m
+            if U > 0 and V > 0 then deep[i] = { U = U, V = V } end
+        elseif kind == "s" then
+            at(p[2], p[3]); at(p[4], p[5])
+            grow = p[6] * size + pad
+        elseif kind == "t" then
+            at(p[2], p[3]); at(p[4], p[5]); at(p[6], p[7])
+        elseif kind == "v" then
+            at(p[2], p[3]); at(p[2] + p[4] * rc[i], p[3] + p[4] * rs[i])
+            grow = (p[5] * size + pad) * 1.6 + 4
+        elseif kind == "*" then
+            at(p[2], p[3])
+            local sr = p[4] * size
+            local reach_ = sr * (1 + (halo + 1.5) / (0.6 * max(sr, 0.01))) ^ 2
+            grow = reach_ + 3
+        else -- "e"
+            at(p[2], p[3])
+            grow = (max(p[4], p[5]) * size + pad) * 1.6 + 4
+        end
+        local x0, x1, y0, y1 = HUGE, -HUGE, HUGE, -HUGE
+        for j = 1, #xs_ do
+            x0, x1 = min(x0, xs_[j]), max(x1, xs_[j])
+            y0, y1 = min(y0, ys_[j]), max(y1, ys_[j])
+        end
+        bx0[i], bx1[i], by0[i], by1[i] = floor(x0 - grow), ceil(x1 + grow), floor(y0 - grow), ceil(y1 + grow)
+    end
+    -- the pixels px (this row) where |a * px + b| <= U
+    local function span(a, b, U)
+        if a > -1e-12 and a < 1e-12 then
+            if b >= -U and b <= U then return -HUGE, HUGE end
+            return 1, 0
+        end
+        local p1, p2 = (-U - b) / a, (U - b) / a
+        if p1 > p2 then p1, p2 = p2, p1 end
+        return ceil(p1 + 1e-6), floor(p2 - 1e-6)
+    end
+    local act, dlo, dhi = {}, {}, {}
+    local runs = shapeRuns(key, function(paint)
+        for py = floor(cy - reach), ceil(cy + reach) do
+            local dy = (py + 0.5 - cy) / size
+            -- the parts that reach this row, and the stretch of the row worth a look
+            local rx0, rx1 = HUGE, -HUGE
+            for i = 1, n do
+                if py >= by0[i] and py <= by1[i] then
+                    if bx0[i] < rx0 then rx0 = bx0[i] end
+                    if bx1[i] > rx1 then rx1 = bx1[i] end
+                end
+                dlo[i], dhi[i] = 1, 0
+                local dp_ = deep[i]
+                if dp_ then
+                    -- u, v of the part's own frame along this row: linear in px
+                    local p = parts[i]
+                    local lx0, ly0 = (0.5 - cx) / size * ct + dy * st, -(0.5 - cx) / size * st + dy * ct
+                    local qx, qy = lx0 - p[2], ly0 - p[3]
+                    local u0, v0 = qx * rc[i] + qy * rs[i], -qx * rs[i] + qy * rc[i]
+                    local du = (ct * rc[i] - st * rs[i]) / size
+                    local dv = -(ct * rs[i] + st * rc[i]) / size
+                    local a1, b1 = span(du, u0, dp_.U)
+                    local a2, b2 = span(dv, v0, dp_.V)
+                    dlo[i], dhi[i] = max(a1, a2), min(b1, b2)
+                end
+            end
+            local xa, xb = max(floor(cx - reach), rx0), min(ceil(cx + reach), rx1)
+            local px = xa
+            while px <= xb do
+                local step = 1
+                local any = false
+                for i = 1, n do
+                    local on = py >= by0[i] and py <= by1[i] and px >= bx0[i] and px <= bx1[i]
+                    act[i] = on
+                    if on then any = true end
+                end
+                -- deep inside the topmost rectangle here, and nothing over it: its fill
+                local k = 0
+                if any then
+                    for i = n, 1, -1 do
+                        if px >= dlo[i] and px <= dhi[i] then k = i break end
+                    end
+                    if k > 0 then
+                        for j = k + 1, n do if act[j] then k = 0 break end end
+                    end
+                end
+                if k > 0 then
+                    -- and on along the row while that holds: up to the end of
+                    -- the deep stretch or the next part over it
+                    local e = min(dhi[k], xb)
+                    for j = k + 1, n do
+                        if py >= by0[j] and py <= by1[j] and bx0[j] > px and bx0[j] - 1 < e then e = bx0[j] - 1 end
+                    end
+                    step = e - px + 1
+                    local fill = parts[k][8]
+                    paint.run(px - ox, py - oy, step, fill[1], fill[2], fill[3])
+                elseif any then
+                local dx = (px + 0.5 - cx) / size
+                local lx, ly = dx * ct + dy * st, -dx * st + dy * ct
+                local dmin = HUGE
+                for i = 1, n do
+                    local p = parts[i]
+                    local d
+                    local kind = p[1]
+                    if not act[i] then
+                        d = HUGE
+                    elseif kind == "e" then
+                        local qx, qy = lx - p[2], ly - p[3]
+                        local u, v = qx * rc[i] + qy * rs[i], -qx * rs[i] + qy * rc[i]
+                        local a, b = p[4], p[5]
+                        local un, vn = u / a, v / b
+                        local q = sqrt(un * un + vn * vn)
+                        local ga, gb = un / a, vn / b
+                        local grad = sqrt(ga * ga + gb * gb)
+                        d = (q > 0 and grad > 0) and (q - 1) * q / grad or -min(a, b)
+                    elseif kind == "v" then
+                        local qx, qy = lx - p[2], ly - p[3]
+                        local u, v = qx * rc[i] + qy * rs[i], -qx * rs[i] + qy * rc[i]
+                        local L, W = p[4], p[5]
+                        local uu = u < 0 and 0 or (u > L and L or u)
+                        local wv = W * math.sin(PI * uu / L)
+                        local slope = W * PI / L * math.cos(PI * uu / L)
+                        d = (math.abs(v) - wv) / sqrt(1 + slope * slope)
+                        if u < 0 then d = max(d, -u) elseif u > L then d = max(d, u - L) end
+                        dist[-i] = u                     -- kept for the vein
+                        dist[-n - i] = v
+                    elseif kind == "*" then
+                        local sx, sy, sr = math.abs(lx - p[2]), math.abs(ly - p[3]), p[4]
+                        d = ((sqrt(sx) + sqrt(sy)) / sqrt(sr) - 1) * sr * 0.6
+                    elseif kind == "t" then
+                        -- distance to the nearest edge, negative inside
+                        local best = math.huge
+                        local sgn = 0
+                        local inside = true
+                        for e = 0, 2 do
+                            local ax, ay = p[2 + 2 * e], p[3 + 2 * e]
+                            local bx2, by2 = p[2 + 2 * ((e + 1) % 3)], p[3 + 2 * ((e + 1) % 3)]
+                            local ex, ey = bx2 - ax, by2 - ay
+                            local len2 = ex * ex + ey * ey
+                            local tt = len2 > 0 and ((lx - ax) * ex + (ly - ay) * ey) / len2 or 0
+                            tt = tt < 0 and 0 or (tt > 1 and 1 or tt)
+                            local fx, fy = ax + ex * tt - lx, ay + ey * tt - ly
+                            local dd = sqrt(fx * fx + fy * fy)
+                            if dd < best then best = dd end
+                            local cr = ex * (ly - ay) - ey * (lx - ax)
+                            if sgn == 0 then sgn = cr > 0 and 1 or -1
+                            elseif (cr > 0 and sgn < 0) or (cr < 0 and sgn > 0) then inside = false end
+                        end
+                        d = inside and -best or best
+                    elseif kind == "r" then
+                        local qx, qy = lx - p[2], ly - p[3]
+                        local u, v = qx * rc[i] + qy * rs[i], -qx * rs[i] + qy * rc[i]
+                        local rad = p[7]
+                        local ax, ay = math.abs(u) - (p[4] - rad), math.abs(v) - (p[5] - rad)
+                        local ox_, oy_ = ax > 0 and ax or 0, ay > 0 and ay or 0
+                        local inside = max(ax, ay)
+                        d = sqrt(ox_ * ox_ + oy_ * oy_) + (inside < 0 and inside or 0) - rad
+                    else
+                        local ax, ay, bx2, by2 = p[2], p[3], p[4], p[5]
+                        local ex, ey = bx2 - ax, by2 - ay
+                        local len2 = ex * ex + ey * ey
+                        local tt = len2 > 0 and ((lx - ax) * ex + (ly - ay) * ey) / len2 or 0
+                        tt = tt < 0 and 0 or (tt > 1 and 1 or tt)
+                        local fx, fy = ax + ex * tt - lx, ay + ey * tt - ly
+                        d = sqrt(fx * fx + fy * fy) - p[6]
+                    end
+                    if d ~= HUGE then d = d * size end
+                    dist[i] = d
+                    if d < dmin then dmin = d end
+                end
+                if dmin < halo + 0.5 then
+                    local r, g, b = ur, ug, ub
+                    if halo > 0 then
+                        local kh = halo + 0.5 - dmin
+                        kh = kh > 1 and 1 or kh
+                        r, g, b = r + (hcol[1] - r) * kh, g + (hcol[2] - g) * kh, b + (hcol[3] - b) * kh
+                    end
+                    for i = 1, n do
+                        local d = dist[i]
+                        local cov = 0.5 - d
+                        if cov > 0 then
+                            if cov > 1 then cov = 1 end
+                            local p = parts[i]
+                            local kind = p[1]
+                            local fill, line
+                            if kind == "*" then fill = p[5]
+                            elseif kind == "r" or kind == "t" then fill, line = p[8], p[9]
+                            elseif kind == "s" then fill = p[7]
+                            else fill, line = p[7], p[8] end
+                            local fr, fg, fb = fill[1], fill[2], fill[3]
+                            if line then
+                                local kl = d + lw + 0.5
+                                -- a leaf's vein down its middle
+                                if p[1] == "v" and p[9] then
+                                    local u, v = dist[-i], dist[-n - i]
+                                    if u > p[4] * 0.08 and u < p[4] * 0.8 then
+                                        local kv = lw * 0.45 - math.abs(v) * size + 0.5
+                                        if kv > kl then kl = kv end
+                                    end
+                                end
+                                kl = kl < 0 and 0 or (kl > 1 and 1 or kl)
+                                fr, fg, fb = fr + (line[1] - fr) * kl, fg + (line[2] - fg) * kl, fb + (line[3] - fb) * kl
+                            end
+                            r, g, b = r + (fr - r) * cov, g + (fg - g) * cov, b + (fb - b) * cov
+                        end
+                    end
+                    paint.put(px - ox, py - oy, r, g, b)
+                end
+                end
+                px = px + step
+            end
+            paint.flush()
+        end
+    end)
+    paintRuns(bb, runs, ox, oy, inv)
+end
+
 -- ─── fonts and text ──────────────────────────────────────────────────────────
 -- Everything here is sized in real pixels, derived from the panel's size.
 -- KOReader's Font:getFace takes a size that it scales for the screen itself
@@ -664,6 +1515,172 @@ local function mtextClass()
     return _MText
 end
 
+-- ─── paint cache ─────────────────────────────────────────────────────────────
+-- A card is drawn from its list of drawing steps every time it is painted,
+-- and most of the time that is the same picture again: the minute tick
+-- repaints a page where only the clock changed, a tab you go back to shows
+-- what it showed before, a menu closing repaints what was under it. So as a
+-- card is built it also writes down what it draws (each shape with its size,
+-- place and colours, each text with its font, which cover bitmap). The first
+-- time it is painted the result is kept under that description; painted
+-- again with the same description over the same background, the kept
+-- picture is copied back instead of drawn. Anything that would change the
+-- picture changes the description, so a kept picture is never out of date.
+--
+-- Only cards are kept (not every piece inside one), only while the screen is
+-- neither rotated nor inverted in software (the copies are then straight
+-- memory copies), and within about two screens' worth of pixels. Pictures
+-- not used for ten minutes (while you read, say) are let go.
+
+-- Appends a plain description of v to out (one token per entry; they are
+-- joined with a separator): numbers, strings, booleans, and tables (lists and
+-- options) by their contents. Anything else by identity (a cover bitmap stays
+-- the same object while it is cached).
+local function ser(v, out, depth)
+    local t = type(v)
+    if t == "number" or t == "string" then
+        out[#out + 1] = v
+    elseif t == "boolean" then
+        out[#out + 1] = v and "T" or "F"
+    elseif t == "nil" then
+        out[#out + 1] = "N"
+    elseif t == "table" and depth < 6 then
+        out[#out + 1] = "{"
+        local n = #v
+        for i = 1, n do ser(v[i], out, depth + 1) end
+        local keys
+        for k in pairs(v) do
+            if not (type(k) == "number" and k >= 1 and k <= n and k % 1 == 0) then
+                keys = keys or {}
+                keys[#keys + 1] = tostring(k)
+            end
+        end
+        if keys then
+            table.sort(keys)
+            for _, k in ipairs(keys) do
+                local val = v[k]
+                if val == nil then val = v[tonumber(k)] end
+                out[#out + 1] = k
+                ser(val, out, depth + 1)
+            end
+        end
+        out[#out + 1] = "}"
+    else
+        out[#out + 1] = tostring(v)
+    end
+end
+A._ser = ser
+
+local PC = { map = {}, n = 0, bytes = 0, tick = 0, hits = 0, misses = 0, swept = false }
+A.PC = PC
+local SWEEP_AFTER = 600
+
+function A.paintCacheClear()
+    for _, e in pairs(PC.map) do pcall(e.bb.free, e.bb) end
+    PC.map, PC.n, PC.bytes = {}, 0, 0
+end
+
+-- About two screens' worth, in the bitmap's own bytes per pixel.
+local function pcBudget(bb)
+    local Screen = A.screen()
+    local bpp = (bb.getBpp and bb:getBpp() or 32) / 8
+    return floor(Screen:getWidth() * Screen:getHeight() * bpp * 2)
+end
+
+local function pcSweep()
+    PC.swept = false
+    local now = os.time()
+    for k, e in pairs(PC.map) do
+        if now - e.at > SWEEP_AFTER then
+            pcall(e.bb.free, e.bb)
+            PC.map[k] = nil
+            PC.n, PC.bytes = PC.n - 1, PC.bytes - e.bytes
+        end
+    end
+    if PC.n > 0 then
+        PC.swept = true
+        pcall(function() require("ui/uimanager"):scheduleIn(SWEEP_AFTER, pcSweep) end)
+    end
+end
+
+local function pcPut(key, bb, samples, budget)
+    local bytes = bb:getWidth() * bb:getHeight() * ((bb.getBpp and bb:getBpp() or 32) / 8)
+    if bytes > budget then pcall(bb.free, bb) return end
+    while PC.bytes + bytes > budget and PC.n > 0 do
+        local old_k, old_e
+        for k, e in pairs(PC.map) do
+            if not old_e or e.used < old_e.used then old_k, old_e = k, e end
+        end
+        pcall(old_e.bb.free, old_e.bb)
+        PC.map[old_k] = nil
+        PC.n, PC.bytes = PC.n - 1, PC.bytes - old_e.bytes
+    end
+    PC.tick = PC.tick + 1
+    PC.map[key] = { bb = bb, samples = samples, bytes = bytes, used = PC.tick, at = os.time() }
+    PC.n, PC.bytes = PC.n + 1, PC.bytes + bytes
+    if not PC.swept then
+        PC.swept = true
+        pcall(function() require("ui/uimanager"):scheduleIn(SWEEP_AFTER, pcSweep) end)
+    end
+end
+
+-- A few pixels of what is under the card, so a kept picture is only used
+-- over the same background it was painted on.
+local SAMPLE_AT = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 1 }, { 0.5, 0.5 }, { 0.5, 0 }, { 0.5, 1 }, { 0, 0.5 }, { 1, 0.5 } }
+local function pcSamples(bb, x, y, w, h)
+    local out = {}
+    for i, p in ipairs(SAMPLE_AT) do
+        local c = bb:getPixel(x + floor(p[1] * (w - 1)), y + floor(p[2] * (h - 1)))
+        local ok, r, g, b = pcall(function()
+            local x32 = c:getColorRGB32()
+            return x32.r, x32.g, x32.b
+        end)
+        out[i] = ok and (r * 65536 + g * 256 + b) or tostring(c)
+    end
+    return table.concat(out, ",")
+end
+
+-- Whether pictures can be kept for painting into bb, at this rectangle.
+local function pcUsable(bb, x, y, w, h)
+    if A._no_paint_cache then return false end
+    if not (bb.getRotation and bb.getInverse and bb.getType and bb.getBpp) then return false end
+    if bb:getRotation() ~= 0 or bb:getInverse() ~= 0 or bb:getBpp() < 8 then return false end
+    if w < 8 or h < 8 or x < 0 or y < 0 or x + w > bb:getWidth() or y + h > bb:getHeight() then return false end
+    return true
+end
+
+-- Some cards draw a little past their own edges (washi tape over a corner,
+-- a big title nudged left). Those are drawn straight onto the screen every
+-- time instead, as before: a kept picture would cut them off. Found out the
+-- first time, by drawing with a margin around the card and checking whether
+-- anything in the margin changed.
+local SPILL = 40
+PC.spills, PC.spill_n = {}, 0
+local _memcmp
+local function memcmp()
+    if _memcmp == nil then
+        local ffi = require("ffi")
+        pcall(ffi.cdef, "int memcmp(const void *s1, const void *s2, size_t n);")
+        local ok = pcall(function() return ffi.C.memcmp end)
+        _memcmp = ok and ffi.C.memcmp or false
+    end
+    return _memcmp
+end
+-- Do rows of a (from ax, ay) and b (from bx, by), w x h pixels, differ?
+local function rowsDiffer(a, ax, ay, b, bx, by, w, h, bpp)
+    if w <= 0 or h <= 0 then return false end
+    local cmp = memcmp()
+    if not cmp then return true end
+    local ffi = require("ffi")
+    local pa, pb = ffi.cast("uint8_t *", a.data), ffi.cast("uint8_t *", b.data)
+    local sa, sb = tonumber(a.stride), tonumber(b.stride)
+    local n = w * bpp
+    for r = 0, h - 1 do
+        if cmp(pa + (ay + r) * sa + ax * bpp, pb + (by + r) * sb + bx * bpp, n) ~= 0 then return true end
+    end
+    return false
+end
+
 -- ─── Canvas ──────────────────────────────────────────────────────────────────
 -- One card. Things are placed at absolute pixel positions inside it, which
 -- keeps layout and tap regions in the same coordinates.
@@ -685,6 +1702,7 @@ local function canvasClass()
         self.ops = {}
         self.regions = {}
         self.owned = {}
+        self.sig = {}
         self.dimen = Geom:new{ w = self.w, h = self.h }
         local Screen = A.screen()
         -- Night mode inverts the screen. Cards meant to look the same day and
@@ -701,6 +1719,35 @@ local function canvasClass()
             local page_bg = A.pageColors()
             self.under = self.inv and { 255 - page_bg[1], 255 - page_bg[2], 255 - page_bg[3] } or page_bg
         end
+        self:mark("base", self.w, self.h, tone and tone.bg, tone and tone.border, self.radius, self.border_w,
+            self.plain, self.fill, self.under, self.inv, self.bleed, self.behind or false)
+    end
+
+    -- Write down one drawing step (see the paint cache above): a tag and up
+    -- to twelve values. (Fixed arguments rather than ..., which keeps it fast
+    -- for cards that draw thousands of small steps.)
+    function C:mark(tag, a, b, c, d, e, f, g, h, i, j, k, l)
+        local sig = self.sig
+        sig[#sig + 1] = tag
+        ser(a, sig, 0); ser(b, sig, 0); ser(c, sig, 0); ser(d, sig, 0)
+        ser(e, sig, 0); ser(f, sig, 0); ser(g, sig, 0); ser(h, sig, 0)
+        ser(i, sig, 0); ser(j, sig, 0); ser(k, sig, 0); ser(l, sig, 0)
+        self._key = nil
+    end
+
+    -- Everything this canvas draws, as one string (nested canvases included).
+    function C:sigKey()
+        local k = self._key
+        if k then return k end
+        local sig, out = self.sig, {}
+        for i = 1, #sig do
+            local e = sig[i]
+            if type(e) == "table" then out[i] = e.sigKey and e:sigKey() or tostring(e)
+            else out[i] = e end
+        end
+        k = table.concat(out, "\1")
+        self._key = k
+        return k
     end
 
     function C:getSize() return Geom:new{ w = self.w, h = self.h } end
@@ -711,37 +1758,72 @@ local function canvasClass()
 
     function C:rect(x, y, w, h, rgb)
         local inv = self.inv
+        -- written down directly: some cards draw a great many of these
+        local sig = self.sig
+        local n = #sig
+        sig[n + 1], sig[n + 2], sig[n + 3], sig[n + 4], sig[n + 5] = "r", x, y, w, h
+        sig[n + 6], sig[n + 7], sig[n + 8], sig[n + 9] = rgb[1], rgb[2], rgb[3], inv and "i" or "-"
+        self._key = nil
         self:op(function(bb, ox, oy) G.rect(bb, ox + x, oy + y, w, h, rgb, inv) end)
     end
 
     function C:rrect(x, y, w, h, r, rgb, under)
         local inv = self.inv
         under = under or (self.tone and self.tone.bg) or self.under
+        self:mark("rr", x, y, w, h, r, rgb, under, inv)
         self:op(function(bb, ox, oy) G.rrect(bb, ox + x, oy + y, w, h, r, rgb, under, inv) end)
     end
 
     function C:frame(x, y, w, h, r, bw, border, fill, under)
         local inv = self.inv
         under = under or (self.tone and self.tone.bg) or self.under
+        self:mark("fr", x, y, w, h, r, bw, border, fill, under, inv)
         self:op(function(bb, ox, oy) G.frame(bb, ox + x, oy + y, w, h, r, bw, border, fill, under, inv) end)
     end
 
     function C:disc(cx, cy, r, rgb, under)
         local inv = self.inv
         under = under or (self.tone and self.tone.bg) or self.under
+        self:mark("d", cx, cy, r, rgb, under, inv)
         self:op(function(bb, ox, oy) G.disc(bb, ox + cx, oy + cy, r, rgb, under, inv) end)
     end
 
     function C:ring(cx, cy, R, t, frac, track, fill)
         local inv = self.inv
         local under = (self.tone and self.tone.bg) or self.under
+        self:mark("g", cx, cy, R, t, frac, track, fill, under, inv)
         self:op(function(bb, ox, oy) G.ring(bb, ox + cx, oy + cy, R, t, frac, track, fill, under, inv) end)
+    end
+
+    -- A small drawing made of parts; see G.sprite.
+    function C:sprite(cx, cy, size, turn, parts, o)
+        local inv = self.inv
+        local under = (self.tone and self.tone.bg) or self.under
+        self:mark("s", cx, cy, size, turn, parts, o, under, inv)
+        self:op(function(bb, ox, oy) G.sprite(bb, ox + cx, oy + cy, size, turn, parts, o, under, inv) end)
+    end
+
+    -- A flower coloured in petal by petal; see G.flower for `o`.
+    function C:flower(cx, cy, R, o)
+        local inv = self.inv
+        local under = (self.tone and self.tone.bg) or self.under
+        self:mark("f", cx, cy, R, o, under, inv)
+        self:op(function(bb, ox, oy) G.flower(bb, ox + cx, oy + cy, R, o, under, inv) end)
+    end
+
+    -- A heart filling up from the tip; see G.heart for `o`.
+    function C:heart(cx, cy, w, h, o)
+        local inv = self.inv
+        local under = (self.tone and self.tone.bg) or self.under
+        self:mark("h", cx, cy, w, h, o, under, inv)
+        self:op(function(bb, ox, oy) G.heart(bb, ox + cx, oy + cy, w, h, o, under, inv) end)
     end
 
     -- A line through points { x1, y1, x2, y2, ... } in canvas coordinates.
     function C:polyline(pts, lw, rgb, under)
         local inv = self.inv
         under = under or (self.tone and self.tone.bg) or self.under
+        self:mark("p", pts, lw, rgb, under, inv)
         self:op(function(bb, ox, oy)
             local moved = {}
             for i = 1, #pts, 2 do moved[i], moved[i + 1] = pts[i] + ox, pts[i + 1] + oy end
@@ -762,7 +1844,10 @@ local function canvasClass()
         }
         local sz = tw:getSize()
         self.owned[#self.owned + 1] = tw
-        return { widget = tw, w = sz.w, h = sz.h, base = tw:getBaseline() or sz.h, px = px }
+        local d = { "t" }
+        ser({ txt, face.hash or face.realname, face.size, bold and true or false, rgb, self.inv,
+            o.max_w and max(8, floor(o.max_w)) or false }, d, 0)
+        return { widget = tw, w = sz.w, h = sz.h, base = tw:getBaseline() or sz.h, px = px, sig = table.concat(d, "\1") }
     end
 
     -- Wrapped text, at most `lines` lines (ellipsis after that).
@@ -785,7 +1870,10 @@ local function canvasClass()
         }
         local sz = tb:getSize()
         self.owned[#self.owned + 1] = tb
-        return { widget = tb, w = sz.w, h = sz.h, base = sz.h, px = px, box = true }
+        local d = { "b" }
+        ser({ tb.text, face.hash or face.realname, face.size, bold and true or false, rgb, self.inv,
+            max(20, floor(width)), lines or false, lh, o.align or "left" }, d, 0)
+        return { widget = tb, w = sz.w, h = sz.h, base = sz.h, px = px, box = true, sig = table.concat(d, "\1") }
     end
 
     -- Place a text. anchor: "l" (default), "c", "r" relative to x.
@@ -795,6 +1883,7 @@ local function canvasClass()
         if valign == "base" then y = y - t.base elseif valign == "mid" then y = y - t.h / 2 end
         x, y = floor(x + 0.5), floor(y + 0.5)
         local w = t.widget
+        self:mark("P", t.sig or tostring(w), x, y)
         self:op(function(bb, ox, oy) w:paintTo(bb, ox + x, oy + y) end)
         return x, y
     end
@@ -824,6 +1913,8 @@ local function canvasClass()
             title = self:textbox(o.title, max(9, floor(w / 8)), w - floor(w / 6), 4,
                 { bold = true, color = tone.fg, align = "center" })
         end
+        self:mark("c", fp or false, x, y, w, h, src and tostring(src) or false, o.top or false, bw, edge,
+            title and title.sig or false, tone.track, inv)
         self:op(function(bb, ox, oy)
             local X, Y = ox + x, oy + y
             if src then
@@ -854,6 +1945,105 @@ local function canvasClass()
         end)
     end
 
+    -- A cover w x h turned by `angle` radians (a few degrees) about cx, cy.
+    -- Turned with two shears, a row and then a column at a time, so it's
+    -- all fast bitmap copies and nothing outside the picture is touched.
+    function C:tilted(fp, cx, cy, w, h, angle, o)
+        o = o or {}
+        w, h = floor(w), floor(h)
+        if w < 4 or h < 4 then return end
+        local tone = self.tone or A.tone("ink")
+        local src = fp and A.D and A.D.cover(fp, w, h, true) or nil
+        if not src then
+            self:sprite(cx, cy, w, angle, { { "r", 0, 0, 0.5, 0.5 * h / w, 0, 0, tone.track, nil } }, { lw = 1 })
+            if o.title and w >= 40 then
+                local t = self:textbox(o.title, max(9, floor(w / 8)), w - floor(w / 6), 4,
+                    { bold = true, color = tone.fg, align = "center" })
+                self:put(t, cx, cy, "c", "mid")
+            end
+            return
+        end
+        self:mark("tc", fp, cx, cy, w, h, angle, tostring(src))
+        self:op(function(bb, ox, oy)
+            local Blitbuffer = require("ffi/blitbuffer")
+            local sw, sh = src:getWidth(), src:getHeight()
+            local sx0, sy0 = max(0, floor((sw - w) / 2)), max(0, floor((sh - h) / 2))
+            local ww, hh = min(w, sw), min(h, sh)
+            local sn = math.sin(angle)
+            local Wt = ww + ceil(math.abs(sn) * hh) + 2
+            local ok, tmp = pcall(Blitbuffer.new, Wt, hh, src:getType())
+            if not ok or not tmp then return end
+            -- first each row moves sideways
+            local rowx = {}
+            for y = 0, hh - 1 do
+                local x0 = floor(Wt / 2 - ww / 2 - sn * (y + 0.5 - hh / 2) + 0.5)
+                rowx[y] = x0
+                tmp:blitFrom(src, x0, y, sx0, sy0 + y, ww, 1)
+            end
+            -- then each column moves up or down: only the rows that reach it
+            local Screen = A.screen()
+            local dither = Screen.sw_dithering and bb.ditherblitFrom
+            local night = Screen.night_mode
+            local CX, CY = ox + cx, oy + cy
+            local bwid, bhei = bb:getWidth(), bb:getHeight()
+            for x = 0, Wt - 1 do
+                local ya, yb
+                for y = 0, hh - 1 do
+                    local x0 = rowx[y]
+                    if x >= x0 and x < x0 + ww then
+                        ya = ya or y
+                        yb = y
+                    end
+                end
+                if ya then
+                    local u = x + 0.5 - Wt / 2
+                    local X = floor(CX + u)
+                    local Y = floor(CY + (ya - hh / 2) + sn * u + 0.5)
+                    local skip = Y < 0 and -Y or 0
+                    local n = min(yb - ya + 1 - skip, bhei - (Y + skip))
+                    if X >= 0 and X < bwid and n > 0 then
+                        if dither then
+                            bb:ditherblitFrom(tmp, X, Y + skip, x, ya + skip, 1, n)
+                        else
+                            bb:blitFrom(tmp, X, Y + skip, x, ya + skip, 1, n)
+                        end
+                        -- keep the cover's real colours when the screen is inverted
+                        if night then bb:invertRect(X, Y + skip, 1, n) end
+                    end
+                end
+            end
+            tmp:free()
+        end)
+    end
+
+    -- A picture file (PNG or JPEG) fitted inside w x h, centred, keeping its
+    -- shape and its transparency. Returns false when it can't be read.
+    function C:image(path, x, y, w, h)
+        x, y, w, h = floor(x), floor(y), floor(w), floor(h)
+        local src = A.picture(path, w, h)
+        if not src then return false end
+        local sw, sh = src:getWidth(), src:getHeight()
+        local ix, iy = x + floor((w - sw) / 2), y + floor((h - sh) / 2)
+        self:mark("i", path, ix, iy, tostring(src))
+        self:op(function(bb, ox, oy)
+            local Screen = A.screen()
+            local X, Y = ox + ix, oy + iy
+            -- in night mode the screen is inverted after painting: blend the
+            -- picture in true colours (like the covers keep theirs)
+            local night = Screen.night_mode
+            if night then bb:invertRect(X, Y, sw, sh) end
+            if Screen.sw_dithering and bb.ditherpmulalphablitFrom then
+                bb:ditherpmulalphablitFrom(src, X, Y, 0, 0, sw, sh)
+            elseif bb.pmulalphablitFrom then
+                bb:pmulalphablitFrom(src, X, Y, 0, 0, sw, sh)
+            else
+                bb:blitFrom(src, X, Y, 0, 0, sw, sh)
+            end
+            if night then bb:invertRect(X, Y, sw, sh) end
+        end)
+        return true
+    end
+
     function C:region(id, x, y, w, h, pad)
         pad = pad or 0
         self.regions[#self.regions + 1] = {
@@ -865,6 +2055,8 @@ local function canvasClass()
     function C:sub(child, x, y, prefix)
         x, y = floor(x), floor(y)
         self.owned[#self.owned + 1] = child
+        self:mark("S", x, y)
+        self.sig[#self.sig + 1] = child
         self:op(function(bb, ox, oy) child:paintTo(bb, ox + x, oy + y, true) end)
         for _, r in ipairs(child.regions) do
             self.regions[#self.regions + 1] = {
@@ -876,6 +2068,7 @@ local function canvasClass()
     function C:paintTo(bb, x, y, nested)
         local w, h = self.w, self.h
         self.dimen = Geom:new{ x = x, y = y, w = w, h = h }
+        if not nested then A.colorMode(true) end
         local px, py, pw, ph = x, y, w, h
         -- In the hero and full-screen grids Bookshelf paints a module into an
         -- offscreen buffer the size of the card's inside, centring it with a
@@ -894,17 +2087,82 @@ local function canvasClass()
                 px, py, pw, ph = 0, 0, bw, bh
             end
         end
+        if self.cache_me and pcUsable(bb, px, py, pw, ph) and not PC.spills[self:sigKey()] then
+            return self:paintKept(bb, x, y, px, py, pw, ph)
+        end
+        self:draw(bb, x, y, px, py, pw, ph)
+    end
+
+    -- The card's background and drawing steps, the card at (x, y), its
+    -- background filling (px, py, pw, ph).
+    function C:draw(bb, x, y, px, py, pw, ph)
         if self.fill then G.rect(bb, px, py, pw, ph, self.fill, false) end
         local tone = self.tone
         if tone and not self.plain then
             local r = self.radius or 0
+            -- `behind`: the card sits on a picture; its corners blend with it
+            local under = self.behind and BEHIND or self.under
             if tone.border and (self.border_w or 0) > 0 then
-                G.frame(bb, px, py, pw, ph, r, self.border_w, tone.border, tone.bg, self.under, self.inv)
+                G.frame(bb, px, py, pw, ph, r, self.border_w, tone.border, tone.bg, under, self.inv)
             else
-                G.rrect(bb, px, py, pw, ph, r, tone.bg, self.under, self.inv)
+                G.rrect(bb, px, py, pw, ph, r, tone.bg, under, self.inv)
             end
         end
         for i = 1, #self.ops do self.ops[i](bb, x, y) end
+    end
+
+    -- Paint through the paint cache: copy a kept picture back, or draw over
+    -- a copy of what is underneath, keep that, and put it on screen.
+    function C:paintKept(bb, x, y, px, py, pw, ph)
+        local Screen = A.screen()
+        local key = table.concat({ self:sigKey(), pw, ph, x - px, y - py, tostring(bb:getType()),
+            Screen.night_mode and "n" or "", Screen.sw_dithering and "d" or "", A.colorMode() and "c" or "" }, "\3")
+        local samples = pcSamples(bb, px, py, pw, ph)
+        local e = PC.map[key]
+        if e and e.samples == samples then
+            bb:blitFrom(e.bb, px, py, 0, 0, pw, ph)
+            PC.tick = PC.tick + 1
+            e.used, e.at = PC.tick, os.time()
+            PC.hits = PC.hits + 1
+            return
+        end
+        PC.misses = PC.misses + 1
+        if e then
+            pcall(e.bb.free, e.bb)
+            PC.map[key] = nil
+            PC.n, PC.bytes = PC.n - 1, PC.bytes - e.bytes
+        end
+        -- draw over a copy of what is underneath, with a margin round the card
+        local bw, bh = bb:getWidth(), bb:getHeight()
+        local ex, ey = max(0, px - SPILL), max(0, py - SPILL)
+        local ew, eh = min(bw, px + pw + SPILL) - ex, min(bh, py + ph + SPILL) - ey
+        local BB = BBmod()
+        local ok, off = pcall(BB.new, ew, eh, bb:getType())
+        if not ok or not off then return self:draw(bb, x, y, px, py, pw, ph) end
+        off:blitFrom(bb, 0, 0, ex, ey, ew, eh)
+        self:draw(off, x - ex, y - ey, px - ex, py - ey, pw, ph)
+        local bpp = bb:getBpp() / 8
+        local ix, iy = px - ex, py - ey
+        local spilled = rowsDiffer(off, 0, 0, bb, ex, ey, ew, iy, bpp)                         -- above
+            or rowsDiffer(off, 0, iy + ph, bb, ex, py + ph, ew, eh - iy - ph, bpp)            -- below
+            or rowsDiffer(off, 0, iy, bb, ex, py, ix, ph, bpp)                                -- left
+            or rowsDiffer(off, ix + pw, iy, bb, px + pw, py, ew - ix - pw, ph, bpp)           -- right
+        if spilled then
+            -- exactly what drawing straight onto bb gives; and from now on, that
+            bb:blitFrom(off, ex, ey, 0, 0, ew, eh)
+            off:free()
+            if PC.spill_n > 256 then PC.spills, PC.spill_n = {}, 0 end
+            PC.spills[self:sigKey()] = true
+            PC.spill_n = PC.spill_n + 1
+            return
+        end
+        bb:blitFrom(off, px, py, ix, iy, pw, ph)
+        local ok2, keep = pcall(BB.new, pw, ph, bb:getType())
+        if ok2 and keep then
+            keep:blitFrom(off, 0, 0, ix, iy, pw, ph)
+            pcPut(key, keep, samples, pcBudget(bb))
+        end
+        off:free()
     end
 
     function C:free()
@@ -919,13 +2177,46 @@ local function canvasClass()
 end
 
 --- A.canvas{ w=, h=, tone="ink"|table|nil, radius=, border_w=, bleed=bool, plain=bool }
+-- Pictures for buttons, read once and kept scaled per size. Like the cover
+-- cache this only drops its references, never frees a bitmap a card on
+-- screen may still be drawing.
+local _pics, _pic_order, _pic_miss = {}, {}, {}
+function A.picture(path, w, h)
+    if type(path) ~= "string" or path == "" or w < 4 or h < 4 then return nil end
+    local ok_l, lfs = pcall(require, "libs/libkoreader-lfs")
+    local mtime = ok_l and lfs and lfs.attributes(path, "modification")
+    if not mtime then return nil end
+    local key = path .. "\0" .. w .. "x" .. h .. "@" .. mtime
+    if _pics[key] then return _pics[key] end
+    if _pic_miss[key] then return nil end
+    local ok, bb = pcall(function()
+        local RenderImage = require("ui/renderimage")
+        local src = RenderImage:renderImageFile(path, false)
+        if not src then return nil end
+        local sw, sh = src:getWidth(), src:getHeight()
+        local k = math.min(w / sw, h / sh)
+        local tw, th = math.max(1, floor(sw * k + 0.5)), math.max(1, floor(sh * k + 0.5))
+        if tw == sw and th == sh then return src end
+        return RenderImage:scaleBlitBuffer(src, tw, th, true)
+    end)
+    if not ok or not bb then
+        _pic_miss[key] = true
+        A.log("picture", path, ok and "could not be read" or bb)
+        return nil
+    end
+    _pics[key] = bb
+    _pic_order[#_pic_order + 1] = key
+    while #_pic_order > 24 do _pics[table.remove(_pic_order, 1)] = nil end
+    return bb
+end
+
 function A.canvas(o)
     local tone = o.tone
     if type(tone) == "string" then tone = A.tone(tone) end
     return canvasClass():new{
         w = max(1, floor(o.w)), h = max(1, floor(o.h)), tone = tone,
         radius = o.radius, border_w = o.border_w, bleed = o.bleed, plain = o.plain, page = o.page,
-        fill = o.fill,
+        fill = o.fill, behind = o.behind,
     }
 end
 

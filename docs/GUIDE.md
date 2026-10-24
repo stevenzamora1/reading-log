@@ -41,7 +41,8 @@ are kept.
 
 The fourth page, **Trends**, has Monthly challenge beside Finish forecast,
 then Reading trends. The fifth, **Library**, has Library stats, Random pick
-beside Most-read authors, then Quote of the day.
+beside Most-read authors, then Quote of the day. The sixth, **Calendar**, is
+the Cover calendar, with arrows at the top to step back through the months.
 
 Tap the tabs at the bottom to switch pages.
 
@@ -49,6 +50,77 @@ Tap the tabs at the bottom to switch pages.
 steps back a month (up to twelve) and the right arrow steps forward. When
 you're on another month, a **Today** button appears to bring you back. Every
 card on the page follows.
+
+### Default or Cute
+
+**Style** in the Dashboard's settings (and in Look and colours on any card)
+switches every cute look at once:
+
+- **Cute:** hearts instead of rings, the Monthly challenge as a flower, the
+  Book club as a garden, the Year goal as a jar of hearts, the quote cards on
+  notebook paper, the cover calendars as polaroids, Continue reading as a
+  scrapbook, Reading trends on sticky notes, the charts as book spines and
+  hearts, Today's timeline as a sky, and the Finish forecast as a desk
+  calendar.
+- **Default:** all of them back as they came.
+
+Each card can still be changed on its own afterwards. When some are cute
+and some aren't, neither is ticked and the settings say so.
+
+### Notebook paper and polaroids
+
+- **Quote cards, Look: Notebook paper** (one setting for all four quote
+  cards): the quote is written on a sheet of lined paper with a pink margin
+  line and punched holes, the lines running under the words, and washi tape
+  across the top corners.
+- **Cover calendars, Look: Polaroids** (one setting for the Cover calendar
+  and Week in covers): each day's cover is a polaroid, a little crooked, with
+  the time read written on its wide bottom edge. A day with two books has a
+  second polaroid behind.
+
+### Scrapbook and sticky notes
+
+- **Continue reading, Look: Scrapbook:** the cover is a polaroid taped to
+  the card, a little crooked, and the progress bar grows as a vine with
+  leaves and a bud at its tip.
+- **Reading trends, Look: Sticky notes:** each trend is on a pastel sticky
+  note with a bit of washi tape and a folded corner. A sprout means going
+  up, a drooping leaf going down, a little sun not enough data yet, and the
+  figure is underlined with a highlighter swoosh.
+- **Finish forecast, Look: Desk calendar:** the finish date is on a little
+  tear-off calendar page with the day circled in a heart and washi tape on
+  the corner, with the weekday and "in 7 days" beside it. The other books
+  get a date sticker each.
+
+### Book spines and hearts (the charts)
+
+One setting, **Charts: Book spines and hearts**, in the settings of any card
+with a chart (Time read by month, Pages per day, When you read, This week,
+This week vs last, Books and pages, and the Monthly challenge's line):
+
+- **Bars** become books standing on a wooden shelf, in pastel colours with two
+  thin bands near their ends. Today (or this month) is in the accent colour,
+  and the best day, month or hour gets a heart on top. In This week vs last
+  the two books lie flat.
+- **Lines** get a soft hill underneath, small hearts on their points and a
+  flower on the latest one.
+
+### Today's timeline as a sky
+
+**Look: Sky** turns the day's line into a strip of sky, from a little sun in
+the morning to a moon at night, with the colours of the day in between (dawn,
+blue sky, sunset, night with stars). Each sitting is a cloud during the day
+or a star in the evening, bigger the longer you read, and a small heart over
+a thin line marks now. The list of sittings shows each one's cloud or star
+beside its time. The Mini dashboard's timeline follows the card.
+
+### Year goal as a jar
+
+Long-press the Year goal card > Module settings > **Look: Jar of hearts**.
+A heart drops into the jar for each book you finish, and the jar holds your
+goal. When you reach it, it sparkles; past it, the lid pops off and the
+extra hearts heap up over the rim ("Goal reached, +3"). For a goal over 150
+books, each heart stands for a few books.
 
 ### Editing the Dashboard
 
@@ -59,7 +131,7 @@ Long-press the Dashboard > Module settings > **Pages and cards**.
 - **+ Add a row** adds one (up to six a page).
 - **Tab name**, **Title on the page** and **Page shown / hidden** change the
   page itself, and **Move tab left / right** changes where its tab sits.
-- **+ Add a page** adds a page of your own (up to seven tabs in all). It
+- **+ Add a page** adds a page of your own (up to eight tabs in all). It
   starts with one card; add rows to it like any other page. **Remove this
   page** takes away a page you added.
 - **Put this page back as it came** undoes your changes to one of the
@@ -92,7 +164,8 @@ then the Control centre. Tap the rings for your reading progress.
 Long-press it > Module settings to pick up to three cards from Reading and
 today's rings, Control centre, Continue reading, Activity rings, This week vs
 last, Week rings, Monthly challenge, Finish forecast, Year goal, Today's
-timeline, Random pick, Quote of the day and Library stats. It shows as many
+timeline, Random pick, Quote of the day, Library stats and Week in covers.
+It shows as many
 as fit, left to right. The rings goals, the challenge, the comparison, the
 pick and the buttons are shared with their full-size cards; **Control centre
 buttons…** in its settings opens the button editor.
@@ -133,6 +206,9 @@ Long-press a card > **Module settings** for its options.
 | Most-read authors | Your top authors, by books finished or by hours read | | By books or time, how many |
 | Random pick | A book you haven't started (see below) | Open opens it, Another picks again | How often, where from, genres, authors |
 | Quote of the day | One of your highlights, and the book it's from | Opens the book; Another shows a different quote | |
+| Quote of the day 2, 3 and 4 | Another random highlight each, never the same as your other quote cards (see below) | Opens the book; Another shows a different quote | |
+| Cover calendar | The month's pages, books and time read, then every day of the month with the cover of the book you read most that day (see below) | A day lists its books; a book opens it | Time on each day (shown as it comes) |
+| Week in covers | This week's days with their covers and time read, in one row | A day lists its books | Time on each day (shown as it comes) |
 | Mini dashboard | One row of small cards for the top of the home screen (see above) | Each small card does what its big one does | The cards, left to right |
 | Control centre | Buttons for any action, lit when they're on, and brightness and warmth in ten steps | Each button runs its action; a step sets the light | Buttons (how many, and each one's action, icon and name), brightness and warmth shown or hidden |
 
@@ -153,6 +229,12 @@ Details, always keep their own job.
 3. Until you tick anything, the card shows the books from the collection
    you're in the middle of.
 
+**Look: Garden** keeps the covers and titles and turns each progress bar
+into a stem. A book you haven't started is a little sprout; as you read, the
+stem grows to the right with leaves along it and a bud at its tip, and the
+faint line ahead shows how far is left. A finished book's stem ends in a
+flower, and its cover gets a dragonfly sticker.
+
 ### How the rings work
 
 Each ring is a goal. It fills clockwise from the top, and a closed ring means
@@ -165,6 +247,24 @@ you met the goal.
 
 The goals are shared by all three cards; change them in any of their
 settings.
+
+### Hearts instead of rings
+
+In the settings of Activity rings, Week rings, Month rings or the Mini
+dashboard, **Shape** switches every rings card between **Rings** and
+**Hearts** at once.
+
+- Each day is two hearts, one inside the other. Both start as outlines and
+  fill up from the bottom like a glass: the **outer heart with pages**, the
+  **inner heart with time**. Half full means half the goal, by area.
+- A day that's over without meeting your goals gets a **broken heart** on
+  Week rings and Month rings. Today never breaks; days still to come are
+  grey outlines.
+- **A broken heart when you miss:** **Either goal** (the default; a heart
+  stays whole only when both are full) or **Both goals** (it breaks only
+  when neither is full).
+- **Heart colours:** **Pink** (the default) or the card's own colours.
+- The Activity rings card shows your streak as text beside the hearts.
 
 ### How Reading trends works
 
@@ -191,6 +291,11 @@ last three months, for the length of this month. Long-press the card >
 Module settings to choose what it counts and to set your own target;
 **Use the automatic target** goes back to the picked one.
 
+**Look: Flower** swaps the ring for a peony. It starts as an outline, like a
+colouring page, and its 25 petals colour in as you go: the centre first, then
+outward ring by ring, clockwise from the top (each petal is 4% of the goal).
+A finished flower sparkles. The Mini dashboard's challenge follows the card.
+
 ### Finish forecast
 
 The date is the book's time left (worked out from your reading speed in that
@@ -205,6 +310,12 @@ you have finished books so far.
   comes), and tap a button to change its **action** (a plugin, a KOReader action, a menu entry,
   a Bookshelf action), its **icon** (from Bookshelf's icon picker) and its
   **name**.
+- **Use a picture** puts a PNG or JPEG of your own on a button instead of the
+  icon. Copy the picture anywhere on your e-reader (a folder such as
+  `koreader/icons` keeps them together), then pick it. Square pictures with a
+  transparent background look best; any size works. The picture is shown on
+  its own, with no tile behind it, and its name turns the accent colour while
+  the button is on. **Use the icon instead** goes back.
 - Wi-Fi, night mode and the light buttons light up while they're on.
 - Tap a step on the brightness or warmth bar to jump to it, or `−` and `+`
   to move one step. Warmth only shows on a device with a warm light.
@@ -247,6 +358,31 @@ uses KOReader's reading statistics.
 It shares Bookshelf's quote of the day, so both show the same highlight.
 Tap **Another** for a different one. If you have no highlights yet, highlight
 a line while you read.
+
+### Cover calendar
+
+Along the top are the month's pages read, books read and time read. Each day
+you read shows the cover of the book you spent longest on that day, with the
+time read under it, the next book fanned out behind it when you read two, and
+"+1" (or more) for any others. Days you didn't read show just the date, and
+today has a bar under its cover. The time can be hidden in the card's
+settings.
+Tap a day to see every book you read that day, with the time and pages; tap
+one to open it. The covers come from KOReader's cover cache, and the books
+from the reading statistics, so it covers every day KOReader timed you,
+including books you've since finished or deleted (those show their title
+instead of a cover). The arrows next to the month's name step back up to
+twelve months, together with the Monthly page; **Today** (or the month's
+name) comes back to this month.
+
+### More than one quote
+
+**Quote of the day** shares Bookshelf's own quote of the day, so it shows the
+same highlight as Bookshelf's card. For more quotes on the same page, add
+**Quote of the day 2**, **3** and **4**: each one picks a random highlight of
+its own every day, never the same one as the other quote cards on screen, and
+**Another** on one doesn't change the others. They pick from the highlights in
+the books in KOReader's reading history.
 
 ### Today's timeline
 

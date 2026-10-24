@@ -49,13 +49,43 @@ local _slots = {}
 -- o.sig   optional function(value) -> string: waiting cards are only asked
 --         to redraw when this changes, so a recheck that finds nothing new
 --         does not repaint the screen
+-- o.heavy never worked out in a hurry (see D.hurry): it can take seconds
+--
+-- D.hurry(seconds): for that long, a read that is needed is worked out on the
+-- spot instead of in the background (when it took less than the time left
+-- last time), so a page that was just turned to is drawn whole, once,
+-- rather than drawn with gaps and then again when the reads land: less
+-- waiting, and one screen update instead of two.
+--
+-- Times are wall-clock seconds (KOReader's monotonic clock): reading the
+-- statistics database or a sidecar waits on the disk, which CPU time misses.
+local _wall
+local function wall()
+    if not _wall then
+        local ok, time = pcall(require, "ui/time")
+        if ok and type(time) == "table" and time.now and time.to_s then
+            _wall = function() return time.to_s(time.now()) end
+        else
+            _wall = os.clock
+        end
+    end
+    return _wall()
+end
+D.wall = wall
+function D.hurry(secs) D._hurry_until = wall() + (secs or 0.3) end
+
 local function deferred(name, o, compute)
-    local s = { at = 0, value = nil, busy = false, waiters = {}, key = nil, sig = nil, sticky = o.sticky }
+    local s = { at = 0, value = nil, busy = false, waiters = {}, key = nil, sig = nil, sticky = o.sticky, cost = nil }
     _slots[name] = s
     local ttl = o.ttl or 60
+    local function fresh()
+        return s.value ~= nil and os.time() - s.at < ttl and (not o.key or o.key() == s.key)
+    end
     local function run()
         local key = o.key and o.key() or nil
+        local t0 = wall()
         local ok, v = pcall(compute)
+        s.cost = wall() - t0
         if not ok then A.log(name, "failed:", v) end
         local first = s.value == nil
         s.value = (ok and v) or false
@@ -66,11 +96,16 @@ local function deferred(name, o, compute)
         return changed
     end
     return function(refresh, sync)
-        local now = os.time()
-        if s.value ~= nil and now - s.at < ttl and (not o.key or o.key() == s.key) then
-            return s.value
-        end
+        if fresh() then return s.value end
         if sync then run() return s.value end
+        local until_ = D._hurry_until
+        if until_ and not o.heavy then
+            local left = until_ - wall()
+            if left > 0 and (s.cost or 0.05) < left then
+                run()
+                return s.value
+            end
+        end
         if refresh then
             local seen = false
             for _, r in ipairs(s.waiters) do if r == refresh then seen = true break end end
@@ -79,7 +114,9 @@ local function deferred(name, o, compute)
         if not s.busy then
             s.busy = true
             require("ui/uimanager"):scheduleIn(0, function()
-                local changed = run()
+                -- (already worked out meanwhile, in a hurry: just tell the waiters)
+                local changed = true
+                if not fresh() then changed = run() end
                 s.busy = false
                 local ws = s.waiters
                 s.waiters = {}
@@ -181,15 +218,27 @@ end
 -- Newest first. A book counts while its status is "reading", or it has no
 -- status yet but has been started and not finished.
 
-local READING_TTL = 20
+-- The list is kept until the reading history changes (a book opened), a
+-- setting changes, or two minutes pass; rescanning the history (and each
+-- book's progress) on every redraw and every minute cost battery for nothing.
+local READING_TTL = 120
 local READING_SCAN = 80
+
+-- Changes whenever a book is opened (it moves to the top of the history).
+local function historySig()
+    local h = history()
+    local e = h[1]
+    return #h .. ":" .. tostring(e and e.file) .. ":" .. tostring(e and e.time)
+end
+D.historySig = historySig
 
 function D.reading(limit)
     limit = limit or 5
     local want = max(limit, 10) -- one scan serves every card (and the day counts)
     local now = os.time()
     local c = D._reading
-    if c and now - c.at < READING_TTL and c.epoch == A.epoch and c.limit >= limit then
+    local sig = historySig()
+    if c and now - c.at < READING_TTL and c.epoch == A.epoch and c.limit >= limit and c.sig == sig then
         if #c.list <= limit then return c.list end
         local cut = {}
         for i = 1, limit do cut[i] = c.list[i] end
@@ -222,7 +271,7 @@ function D.reading(limit)
             end
         end
     end
-    D._reading = { at = now, list = list, epoch = A.epoch, limit = want }
+    D._reading = { at = now, list = list, epoch = A.epoch, limit = want, sig = sig }
     if #list <= limit then return list end
     local cut = {}
     for i = 1, limit do cut[i] = list[i] end
@@ -312,7 +361,10 @@ local function computeYear()
 end
 
 D.year = deferred("year", {
-    ttl = 60,
+    -- worked out again when a book is opened or the day changes, and at
+    -- most every five minutes otherwise (was: every minute)
+    ttl = 300,
+    key = function() return historySig() .. "|" .. os.date("%Y-%m-%d") end,
     sig = function(v)
         local parts = { v.year, v.total }
         for m = 1, 12 do parts[#parts + 1] = #v.months[m] end
@@ -1428,7 +1480,7 @@ end
 -- Recounted at most every 15 minutes, and only while a card that needs it is
 -- on screen; a settings change does not trigger a recount.
 D.library = deferred("library", {
-    ttl = 900, sticky = true,
+    ttl = 900, sticky = true, heavy = true,
     sig = function(v)
         local c = v.counts
         return table.concat({ v.total, c.unread, c.reading, c.on_hold, c.finished }, ",")
@@ -1727,6 +1779,243 @@ function D.today(refresh)
     return v
 end
 
+-- ─── cover calendar ──────────────────────────────────────────────────────────
+-- Which books were read on each day, from the statistics, and the file each
+-- one is (for its cover). The statistics know a book by its checksum, and so
+-- does its sidecar, so the reading history is matched by checksum: newest
+-- first, each sidecar read once a session, stopping at the first match. A
+-- book not found that way is matched by title against the library if it has
+-- been counted already; failing that the day shows the title instead.
+
+local _fp_md5, _md5_fp = {}, {}
+
+local function sidecarMd5(fp)
+    local v = _fp_md5[fp]
+    if v == nil then
+        v = false
+        pcall(function()
+            v = require("docsettings"):open(fp):readSetting("partial_md5_checksum") or false
+        end)
+        _fp_md5[fp] = v
+        if v and not _md5_fp[v] then _md5_fp[v] = fp end
+    end
+    return v or nil
+end
+
+local function fileForBook(md5, title)
+    if md5 then
+        local known = _md5_fp[md5]
+        if known and D.fileExists(known) then return known end
+        for _, e in ipairs(history()) do
+            local fp = e.file
+            if fp and _fp_md5[fp] == nil and D.fileExists(fp) and sidecarMd5(fp) == md5 then return fp end
+        end
+    end
+    local lib = _slots.library and _slots.library.value
+    if lib and type(title) == "string" and title ~= "" then
+        local want = title:lower()
+        for _, b in ipairs(lib.books) do
+            if b.title:lower() == want then return b.fp end
+        end
+    end
+    return nil
+end
+
+-- The days from..to (times, to not included): { ["YYYY-MM-DD"] = { book, ... } },
+-- each day's books read longest first: { title, author, secs, pages, fp }.
+local function readDays(from_t, to_t)
+    local l = lfs()
+    local path = statsPath()
+    if not (l and l.attributes(path, "mode") == "file") then return false end
+    local SQ3 = require("lua-ljsqlite3/init")
+    local conn = SQ3.open(path, "ro")
+    local days, books = {}, {}
+    local ok, err = pcall(function()
+        conn:exec("PRAGMA busy_timeout=200;")
+        local stmt = conn:prepare("SELECT strftime('%Y-%m-%d', p.start_time, 'unixepoch', 'localtime'), p.id_book,"
+            .. " sum(p.duration), count(DISTINCT p.page), b.title, b.authors, b.md5"
+            .. " FROM page_stat_data p JOIN book b ON b.id = p.id_book"
+            .. " WHERE p.start_time >= ? AND p.start_time < ? GROUP BY 1, 2")
+        local row = stmt:reset():bind(from_t, to_t):step()
+        while row do
+            local id = tonumber(row[2]) or 0
+            local bk = books[id]
+            if not bk then
+                local author = type(row[6]) == "string" and row[6]:match("^[^\n]+") or nil
+                bk = { title = type(row[5]) == "string" and row[5] or "", author = author,
+                    md5 = type(row[7]) == "string" and row[7] or nil }
+                books[id] = bk
+            end
+            local d = tostring(row[1])
+            days[d] = days[d] or {}
+            table.insert(days[d], { book = bk, secs = tonumber(row[3]) or 0, pages = tonumber(row[4]) or 0 })
+            row = stmt:step()
+        end
+        stmt:close()
+    end)
+    conn:close()
+    if not ok then error(err) end
+    for _, bk in pairs(books) do bk.fp = fileForBook(bk.md5, bk.title) end
+    local out = {}
+    for d, list in pairs(days) do
+        table.sort(list, function(a, b) return a.secs > b.secs end)
+        local day = {}
+        for i, e in ipairs(list) do
+            day[i] = { title = e.book.title, author = e.book.author, fp = e.book.fp, secs = e.secs, pages = e.pages }
+        end
+        out[d] = day
+    end
+    return out
+end
+
+local function monthRange()
+    local y, m = A.viewMonth()
+    return os.time{ year = y, month = m, day = 1, hour = 0 }, os.time{ year = y, month = m + 1, day = 1, hour = 0 }, y .. "-" .. m
+end
+
+local function weekRange()
+    local t = os.date("*t")
+    local back = (t.wday - D.weekStart()) % 7
+    local from = os.time{ year = t.year, month = t.month, day = t.day - back, hour = 0 }
+    local to = os.time{ year = t.year, month = t.month, day = t.day - back + 7, hour = 0 }
+    return from, to, os.date("%Y-%m-%d", from)
+end
+
+local function daysSig(v)
+    local keys = {}
+    for d, list in pairs(v) do
+        local secs = 0
+        for _, e in ipairs(list) do secs = secs + e.secs end
+        keys[#keys + 1] = d .. "=" .. #list .. ":" .. secs .. ":" .. tostring(list[1] and list[1].fp)
+    end
+    table.sort(keys)
+    return table.concat(keys, ";")
+end
+
+local coverMonth = deferred("cover_month", {
+    ttl = 600, sig = daysSig,
+    key = function() local _, _, k = monthRange(); return statsKey() .. "|" .. k end,
+}, function() local from, to = monthRange(); return readDays(from, to) end)
+
+local coverWeek = deferred("cover_week", {
+    ttl = 600, sig = daysSig,
+    key = function() local _, _, k = weekRange(); return statsKey() .. "|" .. k .. "|" .. D.weekStart() end,
+}, function() local from, to = weekRange(); return readDays(from, to) end)
+
+--- The books read each day of the month the Monthly page shows ("month") or
+--- of this week ("week"). nil while loading, false without statistics.
+function D.coverDays(refresh, which, sync)
+    if which == "week" then return coverWeek(refresh, sync) end
+    return coverMonth(refresh, sync)
+end
+D.readDays = readDays
+
+-- ─── your highlights ─────────────────────────────────────────────────────────
+-- Read from each book's sidecar (KOReader's "annotations", or the older
+-- "highlight" table), once per sidecar version: a sidecar only changes when
+-- its book is opened, so a re-read touches only the books opened since.
+
+local _hl_memo = {}
+local HL_TEXT_MAX = 700
+
+local function clipText(s)
+    s = s:gsub("%s+", " "):match("^%s*(.-)%s*$")
+    if #s > HL_TEXT_MAX then
+        s = (s:sub(1, HL_TEXT_MAX):match("^(.-)%s+%S*$") or s:sub(1, HL_TEXT_MAX)) .. "\xE2\x80\xA6"
+    end
+    return s
+end
+
+--- A book's highlights: { {text, note, chapter, datetime}, ... } in the order made.
+function D.highlightsOf(fp)
+    local okd, DocSettings = pcall(require, "docsettings")
+    local l = lfs()
+    if not (okd and DocSettings and DocSettings.findSidecarFile and l and type(fp) == "string") then return {} end
+    local ok, sidecar = pcall(DocSettings.findSidecarFile, DocSettings, fp)
+    if not ok or not sidecar then _hl_memo[fp] = nil; return {} end
+    local mtime = l.attributes(sidecar, "modification") or 0
+    local m = _hl_memo[fp]
+    if m and m.mtime == mtime then return m.list end
+    local list = {}
+    pcall(function()
+        local ds = DocSettings:open(fp)
+        local ann = ds:readSetting("annotations")
+        if type(ann) == "table" and #ann > 0 then
+            for _, a in ipairs(ann) do
+                -- a highlight has a drawer; a plain page bookmark does not
+                if type(a) == "table" and a.drawer and type(a.text) == "string" and a.text:match("%S") then
+                    local note = type(a.note) == "string" and a.note:match("%S") and clipText(a.note) or nil
+                    list[#list + 1] = { text = clipText(a.text), note = note,
+                        chapter = type(a.chapter) == "string" and a.chapter or nil,
+                        datetime = type(a.datetime) == "string" and a.datetime or nil }
+                end
+            end
+        else
+            local hl = ds:readSetting("highlight")
+            if type(hl) == "table" then
+                local pages = {}
+                for page in pairs(hl) do pages[#pages + 1] = page end
+                table.sort(pages, function(a, b) return tostring(a) < tostring(b) end)
+                for _, page in ipairs(pages) do
+                    for _, h in ipairs(type(hl[page]) == "table" and hl[page] or {}) do
+                        if type(h) == "table" and type(h.text) == "string" and h.text:match("%S") then
+                            list[#list + 1] = { text = clipText(h.text),
+                                datetime = type(h.datetime) == "string" and h.datetime or nil }
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    _hl_memo[fp] = { mtime = mtime, list = list }
+    return list
+end
+
+local HL_SCAN = 300
+
+-- Every book in the reading history that has highlights: { {fp, list}, ... }.
+local function computeHighlights()
+    local out, seen, total = {}, {}, 0
+    local hist = history()
+    for i = 1, min(#hist, HL_SCAN) do
+        local fp = hist[i] and hist[i].file
+        if fp and not seen[fp] and D.fileExists(fp) then
+            seen[fp] = true
+            local list = D.highlightsOf(fp)
+            if #list > 0 then
+                out[#out + 1] = { fp = fp, list = list }
+                total = total + #list
+            end
+        end
+    end
+    return { books = out, total = total }
+end
+
+D.highlights = deferred("highlights", {
+    ttl = 1800, sticky = true, heavy = true,
+    sig = function(v) return v.total .. ":" .. #v.books end,
+}, computeHighlights)
+
+--- Pure: 1..n in an order of their own for `day`, the same all day (the
+--- quote cards walk through it).
+local _order = {}
+function D.dayOrder(n, day)
+    local key = n .. "|" .. tostring(day)
+    if _order.key == key then return _order.list end
+    local h = 5381
+    for i = 1, #key do h = (h * 33 + key:byte(i)) % 2147483647 end
+    local seed = h > 0 and h or 1
+    local list = {}
+    for i = 1, n do list[i] = i end
+    for i = n, 2, -1 do
+        seed = (seed * 48271) % 2147483647
+        local j = (seed % i) + 1
+        list[i], list[j] = list[j], list[i]
+    end
+    _order.key, _order.list = key, list
+    return list
+end
+
 -- ─── quote of the day ────────────────────────────────────────────────────────
 -- Bookshelf's own quote provider: one highlight a day from your books, the
 -- same one its Quote of the day card and %quote token show. It keeps a count
@@ -1749,6 +2038,12 @@ local quoteSlot = deferred("quote", {
 end)
 
 function D.quote(refresh, sync) return quoteSlot(refresh, sync) end
+
+--- The quote Quote of the day showed last, without looking for one.
+function D.quotePeek()
+    local slot = _slots.quote
+    return slot and slot.value or nil
+end
 
 -- Step to another quote (and show it straight away).
 function D.nextQuote()
@@ -1792,11 +2087,47 @@ local function fetchCover(fp)
     return nil
 end
 
+-- A light unsharp mask (3 x 3) for a small cover, so it stays crisp on
+-- e-ink after shrinking. Works on the 8-bit grey and 32-bit colour bitmaps
+-- MuPDF hands back; any other kind is left as it is.
+local function sharpen(bb, amount)
+    local ffi = require("ffi")
+    local BB = require("ffi/blitbuffer")
+    local t = bb:getType()
+    local bpp = (t == BB.TYPE_BB8 and 1) or (t == BB.TYPE_BBRGB32 and 4) or nil
+    if not bpp or bb:getRotation() ~= 0 or bb:getInverse() ~= 0 then return end
+    local w, h = bb:getWidth(), bb:getHeight()
+    local stride = tonumber(bb.stride)
+    if w < 3 or h < 3 or not stride or stride < w * bpp then return end
+    local dst = ffi.cast("uint8_t*", bb.data)
+    local n = stride * h
+    local src = ffi.new("uint8_t[?]", n)
+    ffi.copy(src, dst, n)
+    local chans = bpp == 1 and 1 or 3
+    for y = 1, h - 2 do
+        local row = y * stride
+        for x = 1, w - 2 do
+            local base = row + x * bpp
+            for ch = 0, chans - 1 do
+                local i = base + ch
+                local around = src[i - stride - bpp] + src[i - stride] + src[i - stride + bpp]
+                    + src[i - bpp] + src[i + bpp]
+                    + src[i + stride - bpp] + src[i + stride] + src[i + stride + bpp]
+                local c = src[i]
+                local v = c + amount * (c - around / 8)
+                dst[i] = v < 0 and 0 or (v > 255 and 255 or floor(v + 0.5))
+            end
+        end
+    end
+end
+D._sharpen = sharpen
+
 --- A bitmap at least w x h, scaled so the cover fills that box (the caller
---- crops the overhang). nil when the book has no cover.
-function D.cover(fp, w, h)
+--- crops the overhang). nil when the book has no cover. sharp: sharpened a
+--- little (for small covers that are also turned, like the polaroids).
+function D.cover(fp, w, h, sharp)
     if type(fp) ~= "string" or w < 2 or h < 2 then return nil end
-    local key = fp .. "\0" .. w .. "x" .. h
+    local key = fp .. "\0" .. w .. "x" .. h .. (sharp and "\0s" or "")
     local hit = _covers[key]
     if hit then return hit end
     local miss = _cover_miss[fp]
@@ -1812,6 +2143,7 @@ function D.cover(fp, w, h)
         local tw, th = max(w, floor(sw * k + 0.5)), max(h, floor(sh * k + 0.5))
         return require("ui/renderimage"):scaleBlitBuffer(src, tw, th)
     end)
+    if ok and scaled and sharp then pcall(sharpen, scaled, 0.6) end
     if not ok or not scaled then
         _cover_miss[fp] = os.time()
         return nil

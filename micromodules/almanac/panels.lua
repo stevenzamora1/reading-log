@@ -318,6 +318,292 @@ end
 -- Continue reading
 -- ════════════════════════════════════════════════════════════════════════════
 
+-- ─── polaroids ───────────────────────────────────────────────────────────────
+-- The Polaroid look: each day's cover in a white frame with a wide bottom
+-- edge (the day's time read written on it), a little crooked, like photos
+-- pinned to a board.
+
+local POLA_M, POLA_B = 0.06, 0.27           -- the frame's sides and top, and its bottom (x its width)
+local POLA_RATIO = POLA_M + 1.5 * (1 - 2 * POLA_M) + POLA_B
+local function polaroidOn() return A.get("calendar_look", "plain") == "polaroid" end
+local function polaroidLook(tone)
+    if tone.dark then
+        return { frame = { 238, 236, 230 }, edge = { 170, 170, 166 }, shadow = A.mix(tone.bg, { 0, 0, 0 }, 0.6),
+            caption = { 24, 24, 24 }, photo_edge = { 120, 120, 118 } }
+    end
+    return { frame = { 255, 255, 253 }, edge = { 204, 204, 200 }, shadow = A.mix(tone.bg, { 0, 0, 0 }, 0.16),
+        caption = { 24, 24, 24 }, photo_edge = { 128, 128, 126 } }
+end
+-- a different tilt for each day, 2 to 4 degrees either way, never straight
+local TILTS = { -4, 3, -2, 4, -3, 2 }
+local function tiltFor(day, month)
+    return math.rad(TILTS[((day * 7 + month * 3) % 6) + 1])
+end
+A.polaroidLook = polaroidLook
+
+-- One polaroid of width pw centred on cx, cy, turned by ang.
+local function polaroid(c, cx, cy, pw, ang, book, caption, f_cap, px, L)
+    local m, mb = pw * POLA_M, pw * POLA_B
+    local photo_w = floor(pw - 2 * m)
+    local photo_h = floor(photo_w * 1.5)
+    local ph = pw * POLA_RATIO
+    local sh = max(1, px(3)) / pw
+    c:sprite(cx, cy, pw, ang, {
+        { "r", sh * 0.6, sh, 0.5, 0.5 * POLA_RATIO, 0, 0.012, L.shadow, nil },
+        { "r", 0, 0, 0.5, 0.5 * POLA_RATIO, 0, 0.012, L.frame, L.edge },
+    }, { lw = 1 })
+    -- the photo sits a little above the middle: the bottom edge is the wide one
+    local d = (mb - m) / 2
+    local pcx, pcy = cx + math.sin(ang) * d, cy - math.cos(ang) * d
+    c:tilted(book.fp, pcx, pcy, photo_w, photo_h, ang, { title = book.title })
+    -- a fine smooth line round the photo, so its turned edge isn't stepped
+    local ex, ey = 0.5, 0.5 * photo_h / photo_w
+    local er = max(0.6, px(1) * 0.75) / photo_w
+    c:sprite(pcx, pcy, photo_w, ang, {
+        { "s", -ex, -ey, ex, -ey, er, L.photo_edge }, { "s", ex, -ey, ex, ey, er, L.photo_edge },
+        { "s", ex, ey, -ex, ey, er, L.photo_edge }, { "s", -ex, ey, -ex, -ey, er, L.photo_edge },
+    }, { lw = 1 })
+    if caption then
+        -- written on the wide bottom edge, as big as it fits
+        local cd = ph / 2 - mb / 2
+        local size = f_cap
+        local t = c:text(caption, size, { bold = true, color = L.caption })
+        while t.w > photo_w and size > minFont() do
+            size = max(minFont(), floor(size * 0.9))
+            t = c:text(caption, size, { bold = true, color = L.caption })
+        end
+        c:put(t, cx - math.sin(ang) * cd, cy + math.cos(ang) * cd, "c", "mid")
+    end
+    return ph
+end
+
+-- ─── the club as a garden ────────────────────────────────────────────────────
+-- Each pick's progress bar grows as a stem with leaves, a bud at its tip and
+-- a flower at the end once it's read; a finished book gets a dragonfly
+-- sticker on its cover.
+
+local function gardenLook(tone)
+    if tone.dark then
+        return { stem = { 126, 192, 120 }, leaf = { 104, 172, 104 }, leaf_line = { 160, 218, 152 },
+            track = A.mix(tone.bg, tone.fg, 0.22), petal = { 255, 160, 204 }, petal_line = { 255, 112, 176 },
+            middle = { 255, 210, 90 }, middle_line = { 214, 150, 40 },
+            wing = { 226, 244, 248 }, wing_line = { 70, 140, 160 }, body = { 40, 140, 160 }, body_line = { 18, 76, 96 },
+            sticker = { 255, 255, 255 } }
+    end
+    return { stem = { 92, 156, 88 }, leaf = { 120, 178, 110 }, leaf_line = { 66, 124, 70 },
+        track = tone.track, petal = { 240, 140, 182 }, petal_line = { 196, 60, 124 },
+        middle = { 250, 200, 70 }, middle_line = { 200, 140, 30 },
+        wing = { 218, 240, 244 }, wing_line = { 60, 128, 150 }, body = { 30, 122, 142 }, body_line = { 14, 70, 90 },
+        sticker = { 255, 255, 255 } }
+end
+
+local function dragonflyParts(L)
+    local W, WL, B, BL = L.wing, L.wing_line, L.body, L.body_line
+    local rad = math.rad
+    return {
+        { "e", -0.40, -0.11, 0.40, 0.10, rad(8), W, WL },     -- forewings
+        { "e", 0.40, -0.11, 0.40, 0.10, rad(-8), W, WL },
+        { "e", -0.35, 0.07, 0.35, 0.095, rad(-14), W, WL },  -- hind wings
+        { "e", 0.35, 0.07, 0.35, 0.095, rad(14), W, WL },
+        { "e", 0, 0.45, 0.05, 0.40, 0, B, BL },               -- tail
+        { "e", 0, -0.02, 0.085, 0.13, 0, B, BL },             -- thorax
+        { "e", 0, -0.21, 0.105, 0.085, 0, B, BL },            -- head
+    }
+end
+
+local function bloomParts(L)
+    local parts = {}
+    for k = 0, 4 do
+        local a = math.rad(-90 + k * 72)
+        parts[#parts + 1] = { "e", 0.34 * math.cos(a), 0.34 * math.sin(a), 0.34, 0.24, a, L.petal, L.petal_line }
+    end
+    parts[#parts + 1] = { "e", 0, 0, 0.2, 0.2, 0, L.middle, L.middle_line }
+    return parts
+end
+
+local function budParts(L)
+    local rad = math.rad
+    return {
+        { "e", 0.08, 0, 0.36, 0.22, 0, L.petal, L.petal_line },                 -- the bud, pointing right
+        { "v", -0.18, 0, 0.42, 0.12, rad(-28), L.leaf, L.leaf_line, false },    -- and the leaves round its base
+        { "v", -0.18, 0, 0.42, 0.12, rad(28), L.leaf, L.leaf_line, false },
+    }
+end
+
+local function sproutParts(L)
+    local rad = math.rad
+    return {
+        { "s", 0, 0.3, 0, -0.05, 0.06, L.stem },
+        { "v", 0, -0.02, 0.55, 0.17, rad(-145), L.leaf, L.leaf_line, true },
+        { "v", 0, -0.02, 0.62, 0.19, rad(-35), L.leaf, L.leaf_line, true },
+    }
+end
+
+-- A pick's progress as a stem along x..x+w, in a row of height h from y.
+local function gardenStem(c, x, y, w, h, pct, finished, px, L)
+    local sy = y + h * 0.62                    -- the stem's line, a little below the middle
+    local amp = max(1, px(3))
+    local period = max(20, px(70))
+    local bloom_r = floor(h * 0.48)
+    local grow = w - bloom_r - px(4)
+    local tip = x + grow * (finished and 1 or A.clamp(pct, 0, 1))
+    local function wave(from, to, lw, col)
+        if to - from < 1 then return end
+        local pts = {}
+        local steps = max(2, floor((to - from) / max(2, px(4))))
+        for k = 0, steps do
+            local xx = from + (to - from) * k / steps
+            pts[#pts + 1] = xx
+            pts[#pts + 1] = sy + amp * math.sin((xx - x) / period * 2 * math.pi)
+        end
+        c:polyline(pts, lw, col)
+    end
+    local function yAt(xx) return sy + amp * math.sin((xx - x) / period * 2 * math.pi) end
+    -- where it will grow, faintly
+    wave(tip, x + grow, max(1, px(2)), L.track)
+    if pct <= 0 and not finished then
+        local sz = h * 0.85
+        c:sprite(x + sz * 0.45, sy - sz * 0.28, sz, 0, sproutParts(L), { lw = max(1, px(2)) })
+        return
+    end
+    wave(x, tip, max(2, px(5)), L.stem)
+    -- leaves along what has grown, one up, one down
+    local step = max(px(30), floor(h * 0.85))
+    local leaf = h * 0.55
+    local up = true
+    local lx = x + px(14)
+    while lx < tip - px(14) do
+        local turn = up and math.rad(-48) or math.rad(48)
+        c:sprite(lx, yAt(lx), leaf, 0, { { "v", 0, 0, 1, 0.34, turn, L.leaf, L.leaf_line, true } }, { lw = max(1, px(2)) })
+        lx = lx + step
+        up = not up
+    end
+    if finished then
+        c:sprite(x + w - bloom_r, yAt(x + grow) - bloom_r * 0.35, bloom_r * 2, 0, bloomParts(L), { lw = max(1, px(2)) })
+    else
+        local bud = h * 0.85
+        c:sprite(tip + bud * 0.3, yAt(tip), bud, 0, budParts(L), { lw = max(1, px(2)) })
+    end
+end
+
+-- A dragonfly sticker on the top right of a finished book's cover.
+local function dragonflySticker(c, x, y, cover_w, cover_h, px, L)
+    local size = max(px(24), cover_w * 0.34)
+    c:sprite(x + cover_w - size * 0.62, y + size * 0.62, size, math.rad(35), dragonflyParts(L),
+        { lw = max(1, px(2)), halo = max(2, px(4)), halo_col = L.sticker })
+end
+A.gardenLook, A.dragonflyParts = gardenLook, dragonflyParts
+
+-- ─── charts: book spines on a shelf, hills with hearts ───────────────────────
+-- The cozy chart look: each bar is a book standing on a wooden shelf (pastel,
+-- two bands near its ends, the best one with a heart on top), and each line
+-- has a soft hill under it, hearts on its points and a flower on the last.
+
+local function cozyOn() return A.get("chart_look", "plain") == "cozy" end
+local SPINES = { { 244, 170, 192 }, { 168, 204, 236 }, { 188, 224, 186 }, { 248, 212, 148 }, { 206, 186, 236 },
+    { 246, 190, 158 } }
+local WOOD, WOOD_EDGE = { 200, 154, 106 }, { 146, 104, 66 }
+local function spineColour(i, tone)
+    local p = SPINES[(i - 1) % #SPINES + 1]
+    return tone.dark and A.mix(tone.bg, p, 0.72) or p
+end
+local function cozyHeart(tone)
+    if tone.dark then return { 255, 136, 187 }, { 255, 200, 224 } end
+    return { 236, 110, 160 }, { 176, 36, 98 }
+end
+-- the shelf the books stand on: x..x+w, its top at y; returns its thickness
+local function shelf(c, x, y, w, px, tone)
+    local th = max(4, px(9))
+    c:rrect(x - px(4), y, w + px(8), th, max(1, px(2)), tone.dark and A.mix(tone.bg, WOOD, 0.72) or WOOD)
+    c:rect(x - px(4), y + th - max(1, px(2)), w + px(8), max(1, px(2)), WOOD_EDGE)
+    return th
+end
+-- one book standing at x with its foot on `base`, bw wide and bh tall
+local function spineUp(c, x, base, bw, bh, col, px)
+    if bh < 1 or bw < 1 then return end
+    local top = base - bh
+    local r = max(1, min(px(4), floor(min(bw, bh) * 0.2)))
+    if bw >= 5 and bh >= 5 then
+        c:frame(x, top, bw, bh, r, 1, A.mix(col, { 0, 0, 0 }, 0.3), col)
+    else
+        c:rect(x, top, bw, bh, col)
+    end
+    -- two thin bands near the ends, where there's room for them
+    local band = A.mix(col, { 0, 0, 0 }, 0.24)
+    local bt = max(1, px(2))
+    if bw >= max(5, px(8)) then
+        local inset = max(px(5), floor(bh * 0.12))
+        if bh >= px(28) then
+            c:rect(x + 1, top + inset, bw - 2, bt, band)
+            c:rect(x + 1, base - inset - bt, bw - 2, bt, band)
+        elseif bh >= px(14) then
+            c:rect(x + 1, top + floor(bh * 0.3), bw - 2, bt, band)
+        end
+    end
+end
+-- one book lying flat from x, len long and th thick (the compare card)
+local function spineFlat(c, x, y, len, th, col, px)
+    if len < 1 or th < 1 then return end
+    local r = max(1, min(px(4), floor(min(len, th) * 0.2)))
+    c:frame(x, y, len, th, r, 1, A.mix(col, { 0, 0, 0 }, 0.3), col)
+    local band = A.mix(col, { 0, 0, 0 }, 0.24)
+    local bt = max(1, px(2))
+    if len >= px(40) then
+        local inset = max(px(6), floor(len * 0.05))
+        c:rect(x + inset, y + 1, bt, th - 2, band)
+        c:rect(x + len - inset - bt, y + 1, bt, th - 2, band)
+    end
+end
+-- a heart sitting on top of a bar centred at cx whose top is y
+local function bestHeart(c, cx, y, size, tone, px)
+    local fill, line = cozyHeart(tone)
+    c:heart(cx, y - size * 0.5 - max(1, px(2)), size, size, { outer = 1, line = line, fill = fill, track = fill,
+        t = max(1, px(2)) })
+end
+-- a soft hill under a line: pts = { x1, y1, x2, y2, ... }, down to `bottom`
+local function hill(c, pts, bottom, col)
+    local n = floor(#pts / 2)
+    if n < 2 then return end
+    for i = 1, 2 * n - 2, 2 do
+        local xa, ya, xb, yb = pts[i], pts[i + 1], pts[i + 2], pts[i + 3]
+        local x0, x1 = floor(xa + 0.5), floor(xb + 0.5)
+        for x = x0, x1 - 1 do
+            local t = (xb > xa) and ((x + 0.5 - xa) / (xb - xa)) or 0
+            local y = floor(ya + (yb - ya) * t + 0.5)
+            if bottom - y > 0 then c:rect(x, y, 1, bottom - y, col) end
+        end
+    end
+end
+-- a heart on a point of a line
+local function pointHeart(c, x, y, size, col, px)
+    c:heart(x, y, size, size, { outer = 1, line = A.mix(col, { 0, 0, 0 }, 0.3), fill = col, track = col,
+        t = max(1, px(2)) })
+end
+A.cozyOn = cozyOn
+
+-- ─── Continue reading as a scrapbook ─────────────────────────────────────────
+-- The cover as a polaroid taped to the card, and the progress bar as a vine.
+
+local function scrapOn() return A.get("continue_look", "classic") == "scrapbook" end
+local function scrapLook(tone)
+    local L = polaroidLook(tone)
+    L.tape, L.tape_line = { 248, 206, 220 }, { 226, 160, 186 }
+    if tone.dark then L.tape, L.tape_line = { 214, 150, 176 }, { 240, 190, 210 } end
+    return L
+end
+
+-- The scrapbook cover in the box x, y, w, h (where the plain cover goes).
+local function scrapCover(c, x, y, w, h, book, px, L)
+    local ang = math.rad(-3)
+    local pw = min(w * 0.98 / 1.05, h * 0.96 / (POLA_RATIO + 0.05))
+    local ph = pw * POLA_RATIO
+    local cx, cy = x + w / 2, y + h / 2 + px(2)
+    polaroid(c, cx, cy, pw, ang, book, nil, nil, px, L)
+    -- washi tape across the top
+    c:sprite(cx - pw * 0.02, cy - ph / 2 + px(2), pw * 0.62, math.rad(-5),
+        { { "r", 0, 0, 0.5, 0.12, 0, 0.02, L.tape, L.tape_line } }, { lw = 1 })
+end
+
 P.continue = {
     does = T("opens the book"),
     title = T("Continue reading"), tone = "paper", ratio = 0.36, ratio_narrow = 0.62,
@@ -356,7 +642,9 @@ function P.continue.build(env)
     local edge = tone.border or tone.muted
     local pct_txt = string.format("%d%%", floor(book.pct * 100 + 0.5))
     local left_txt = book.left_min and (A.fmtMinutes(book.left_min) .. T(" left")) or nil
-    local bar_h = max(4, px(10))
+    local scrap = scrapOn() and scrapLook(tone) or nil
+    local gl = scrap and gardenLook(tone) or nil
+    local bar_h = scrap and max(px(20), px(36)) or max(4, px(10))
     -- how long this book has been on the go, from the first session the
     -- statistics recorded, and the time spent reading it so far
     local days_n, book_secs
@@ -381,8 +669,12 @@ function P.continue.build(env)
         local y_btn = bottom - btn_h
         local y_row = (with_buttons and (y_btn - px(12)) or bottom) - t_pct.h
         local y_bar = y_row - px(8) - bar_h
-        c:rrect(x, y_bar, width, bar_h, bar_h / 2, tone.track)
-        c:rrect(x, y_bar, max(bar_h, round(width * A.clamp(book.pct, 0, 1))), bar_h, bar_h / 2, tone.btn, tone.track)
+        if scrap then
+            gardenStem(c, x, y_bar, width, bar_h, A.clamp(book.pct, 0, 1), book.pct >= 0.995, px, gl)
+        else
+            c:rrect(x, y_bar, width, bar_h, bar_h / 2, tone.track)
+            c:rrect(x, y_bar, max(bar_h, round(width * A.clamp(book.pct, 0, 1))), bar_h, bar_h / 2, tone.btn, tone.track)
+        end
         c:put(t_pct, x, y_row)
         if t_left then c:put(t_left, x + width, y_row + t_pct.base, "r", "base") end
         if with_buttons then
@@ -459,7 +751,11 @@ function P.continue.build(env)
             cover_w = round(inner * 0.34)
             cover_h = round(cover_w * 1.5)
         end
-        c:cover(book.fp, pad, pad, cover_w, cover_h, { title = book.title, edge = edge })
+        if scrap then
+            scrapCover(c, pad, pad, cover_w, cover_h, book, px, scrap)
+        else
+            c:cover(book.fp, pad, pad, cover_w, cover_h, { title = book.title, edge = edge })
+        end
         c:region("open", pad, pad, cover_w, cover_h)
         local tx = pad + cover_w + px(24)
         local tw = w - pad - tx
@@ -486,7 +782,11 @@ function P.continue.build(env)
     local pad_x, pad_y = px(40), px(26)
     local cover_h = h - 2 * pad_y
     local cover_w = round(cover_h * 2 / 3)
-    c:cover(book.fp, pad_x, pad_y, cover_w, cover_h, { title = book.title, edge = edge })
+    if scrap then
+        scrapCover(c, pad_x, pad_y, cover_w, cover_h, book, px, scrap)
+    else
+        c:cover(book.fp, pad_x, pad_y, cover_w, cover_h, { title = book.title, edge = edge })
+    end
     c:region("open", pad_x, pad_y, cover_w, cover_h)
     local tx = pad_x + cover_w + px(38)
     local tw = w - tx - pad_x
@@ -557,6 +857,45 @@ local function statsFor(env)
     return D.stats(env.refresh)
 end
 
+-- ─── hearts instead of rings ─────────────────────────────────────────────────
+-- One setting for every rings card: two hearts, one inside the other, that
+-- fill up like a glass. The outer one with pages, the inner one with time.
+
+local function hearts() return A.get("ring_shape", "rings") == "hearts" end
+A.hearts = hearts
+
+-- The colours of the two hearts (pages, time): pinks, or the card's own.
+local function heartColors(tone)
+    if A.get("heart_colors", "pink") ~= "pink" then return tone.series[1], tone.series[2] end
+    if tone.dark then return { 255, 136, 187 }, { 255, 196, 222 } end
+    return { 228, 96, 152 }, { 190, 30, 100 }
+end
+A.heartColors = heartColors
+
+-- What's still empty inside a heart: lighter than a ring's track.
+local function heartTrack(tone) return A.mix(tone.bg, tone.track, 0.6) end
+
+-- Whether a day that's over gets a broken heart: when a goal was missed, or
+-- only when both were.
+local function heartBroken(fp, fm)
+    if A.get("heart_broken", "any") == "both" then return fp < 1 and fm < 1 end
+    return fp < 1 or fm < 1
+end
+A.heartBroken = heartBroken
+
+-- One day's hearts in a d x d box. o = { future, past (the day is over),
+-- single (no room for the inner heart) }
+local function dayHeart(c, cx, cy, d, tone, fp, fm, o)
+    local single = o.single
+    if o.future then
+        c:heart(cx, cy, d, d, { outer = 0, inner = (not single) and 0 or nil, line = tone.track, track = tone.bg })
+        return
+    end
+    local c1, c2 = heartColors(tone)
+    c:heart(cx, cy, d, d, { outer = fp, inner = (not single) and fm or nil, line = c1, line_in = c2,
+        track = heartTrack(tone), broken = o.past and heartBroken(fp, fm) or nil })
+end
+
 function P.activity.build(env)
     local w, h, tone = env.w, env.h, env.tone
     local s = min(w / 546, h / 335)
@@ -585,9 +924,16 @@ function P.activity.build(env)
     local t = max(3, round(R * 0.215))
     local gap = max(1, round(R * 0.055))
     local cols = tone.series
-    c:ring(cx, cy, R, t, pages / page_goal, tone.track, cols[1])
-    c:ring(cx, cy, R - t - gap, t, mins / min_goal, tone.track, cols[2])
-    c:ring(cx, cy, R - 2 * (t + gap), t, streak / streak_goal, tone.track, cols[3])
+    if hearts() then
+        local c1, c2 = heartColors(tone)
+        cols = { c1, c2, tone.series[3] }
+        c:heart(cx, cy, 2 * R, 2 * R, { outer = pages / page_goal, inner = mins / min_goal, line = c1, line_in = c2,
+            track = heartTrack(tone) })
+    else
+        c:ring(cx, cy, R, t, pages / page_goal, tone.track, cols[1])
+        c:ring(cx, cy, R - t - gap, t, mins / min_goal, tone.track, cols[2])
+        c:ring(cx, cy, R - 2 * (t + gap), t, streak / streak_goal, tone.track, cols[3])
+    end
 
     local lines = {
         st and A.plural(pages, "page", "pages") or "\xE2\x80\xA6",
@@ -639,6 +985,143 @@ local function yearFor(env)
     return D.year(env.refresh)
 end
 
+-- ─── the year goal as a jar of hearts ────────────────────────────────────────
+-- One heart drops into the jar for each book finished; the jar holds the
+-- year's goal. Past the goal the lid pops off and the hearts heap up over
+-- the rim.
+
+local function jarLook(tone)
+    if tone.dark then
+        return { glass_line = { 128, 160, 176 }, glass = A.mix(tone.bg, { 90, 124, 140 }, 0.3), shine = { 210, 230, 238 },
+            lid = { 255, 136, 187 }, lid_line = { 255, 196, 222 },
+            hearts = { { 255, 120, 180 }, { 255, 88, 156 }, { 255, 172, 210 } }, heart_line = { 150, 40, 90 },
+            sparkle = { 255, 210, 90 } }
+    end
+    return { glass_line = { 146, 176, 190 }, glass = A.mix(tone.bg, { 205, 228, 238 }, 0.45), shine = { 255, 255, 255 },
+        lid = { 236, 126, 176 }, lid_line = { 186, 48, 116 },
+        hearts = { { 236, 110, 160 }, { 212, 62, 120 }, { 246, 162, 198 } }, heart_line = { 176, 36, 98 },
+        sparkle = { 236, 170, 30 } }
+end
+local function jarOn() return A.get("goal_look", "number") == "jar" end
+A.jarLook = jarLook
+
+-- The rows of hearts that fit w x h, filled from the bottom: the heart size
+-- and each slot's centre, n slots at least.
+local function heartSlots(w, h, n)
+    local hw = min(w / 2, h / 1.2)
+    for _ = 1, 60 do
+        local rh = hw * 0.8
+        local rows = max(1, floor((h - hw) / rh) + 1)
+        local cap = 0
+        for j = 0, rows - 1 do
+            local k = (j % 2 == 0) and floor(w / hw) or floor((w - hw / 2) / hw)
+            cap = cap + max(1, k)
+        end
+        if cap >= n or hw < 4 then break end
+        hw = hw * 0.95
+    end
+    local rh = hw * 0.8
+    local slots = {}
+    local j = 0
+    while #slots < 400 do
+        local y = h - hw / 2 - j * rh
+        if y < hw * 0.4 then break end
+        local odd = j % 2 == 1
+        local k = odd and floor((w - hw / 2) / hw) or floor(w / hw)
+        k = max(1, k)
+        local spare = w - k * hw - (odd and hw / 2 or 0)
+        for m = 0, k - 1 do
+            slots[#slots + 1] = { (odd and hw / 2 or 0) + spare / 2 + m * hw + hw / 2, y }
+        end
+        j = j + 1
+    end
+    return hw, slots
+end
+
+-- A jar in the box x, y, w, h holding `done` of `target` hearts.
+local function drawJar(c, x, y, w, h, done, target, px, L)
+    -- a very big goal: a heart for every few books
+    local per = target > 150 and math.ceil(target / 150) or 1
+    local goal_n = math.ceil(target / per)
+    local have = floor(done / per)
+    local over = have > goal_n
+    local box_top = y
+    if over then
+        -- room above the rim for the heap and the lid
+        y, h = y + floor(h * 0.2), h - floor(h * 0.2)
+    end
+    local bw = max(2, px(4))
+    local lid_h = max(px(10), floor(h * 0.085))
+    local neck_w = floor(w * 0.74)
+    local neck_x = x + floor((w - neck_w) / 2)
+    local neck_top = y + floor(lid_h * 0.6)
+    local body_top = y + lid_h + max(px(6), floor(h * 0.04))
+    local body_h = y + h - body_top
+    local r = floor(w * 0.17)
+    c:frame(neck_x, neck_top, neck_w, body_top - neck_top + bw, max(2, px(5)), bw, L.glass_line, L.glass)
+    c:frame(x, body_top, w, body_h, r, bw, L.glass_line, L.glass)
+    c:rect(neck_x + bw, body_top, neck_w - 2 * bw, bw, L.glass)
+    -- a shine down the glass
+    local sx = x + bw + max(2, floor(w * 0.1))
+    c:polyline({ sx, body_top + r * 0.8, sx, body_top + body_h * 0.62 }, max(2, px(4)), L.shine)
+    c:polyline({ sx, body_top + body_h * 0.7, sx, body_top + body_h * 0.76 }, max(2, px(4)), L.shine)
+    -- the hearts, from the bottom
+    local ipad = max(1, px(4))
+    local ix, iy = x + bw + ipad, body_top + bw + ipad
+    local iw, ih = w - 2 * (bw + ipad), body_h - 2 * (bw + ipad)
+    local hw, slots = heartSlots(iw, ih, goal_n)
+    local function heartAt(cx, cy, i)
+        -- a little out of line, like a real pile
+        local jx = ((i * 37) % 11 - 5) / 5 * hw * 0.06
+        local jy = ((i * 53) % 7 - 3) / 3 * hw * 0.05
+        local col = L.hearts[(i * 7) % 3 + 1]
+        c:heart(cx + jx, cy + jy, hw * 0.98, hw * 0.98, { outer = 1, line = L.heart_line, fill = col, track = col,
+            t = max(1, hw * 0.07) })
+    end
+    local n_in = min(have, #slots)
+    for i = 1, n_in do heartAt(ix + slots[i][1], iy + slots[i][2], i) end
+    -- past the goal: the hearts heap up over the rim, the lid off to one side
+    local heaped = 0
+    if over and have > #slots then
+        local extra = have - #slots
+        local rh = hw * 0.8
+        local base = body_top - hw * 0.1
+        local k = max(1, floor((neck_w - 2 * bw) / hw))
+        local row = 0
+        while extra > 0 and k >= 1 and base - row * rh - hw * 0.45 >= box_top do
+            local cy = base - row * rh
+            local x0 = x + w / 2 - k * hw / 2 + hw / 2
+            for m = 0, k - 1 do
+                if extra <= 0 then break end
+                heaped = heaped + 1
+                heartAt(x0 + m * hw, cy, n_in + heaped)
+                extra = extra - 1
+            end
+            row = row + 1
+            k = k - 1
+        end
+    end
+    local lid_w = floor(w * 0.82)
+    if over then
+        -- the lid, popped off and resting on the heap
+        c:sprite(x + w * 0.2, y - h * 0.03, floor(w * 0.7), math.rad(-22),
+            { { "e", 0, 0, 0.5, 0.13, 0, L.lid, L.lid_line } }, { lw = max(1, px(3)) })
+    else
+        local lx = x + floor((w - lid_w) / 2)
+        c:frame(lx, y, lid_w, lid_h, max(2, px(5)), max(1, px(3)), L.lid_line, L.lid)
+        for k = 1, 5 do
+            local gx = lx + floor(lid_w * k / 6)
+            c:rect(gx, y + floor(lid_h * 0.25), max(1, px(2)), floor(lid_h * 0.5), L.lid_line)
+        end
+    end
+    if have >= goal_n then
+        local sz = w * 0.5
+        c:sprite(x + w / 2, y + h * 0.45, sz, 0, {
+            { "*", 1.12, -0.7, 0.16, L.sparkle }, { "*", -1.12, -0.35, 0.11, L.sparkle }, { "*", 1.05, 0.25, 0.08, L.sparkle },
+        })
+    end
+end
+
 function P.goal.build(env)
     local w, h, tone = env.w, env.h, env.tone
     local strip = (w / h) > 2.6
@@ -648,7 +1131,10 @@ function P.goal.build(env)
     local yr = yearFor(env)
     local t = os.date("*t")
     local pad = px(32)
-    local t_label = c:label(tostring(t.year) .. T(" goal"), fpx(22), pad, px(22), { bold = true, caps = true, color = tone.accent })
+    local jar = jarOn()
+    local strip_jw = 0
+    if jar and strip then strip_jw = min(floor((h - px(30)) * 0.72), floor(w * 0.16)) + px(30) end
+    local t_label = c:label(tostring(t.year) .. T(" goal"), fpx(22), pad + strip_jw, px(22), { bold = true, caps = true, color = tone.accent })
 
     local target, other = D.yearGoal()
     if env.sample then target, other = 36, 0 end
@@ -661,6 +1147,8 @@ function P.goal.build(env)
     local diff = done - expected
     if not yr then
         status = "\xE2\x80\xA6"
+    elseif done > target then
+        status = A.tr("Goal reached, +%1", done - target)
     elseif done >= target then
         status = T("Goal reached")
     elseif diff >= 1 then
@@ -672,8 +1160,18 @@ function P.goal.build(env)
     end
 
     local top = px(22) + t_label.h
+    -- the jar on the left, everything else beside it
+    local lx = pad
+    if jar then
+        local jy = strip and px(14) or (top + px(6))
+        local jh = h - jy - px(16)
+        local jw = min(floor(jh * 0.72), floor(w * (strip and 0.16 or 0.36)))
+        jh = min(jh, floor(jw / 0.72))
+        drawJar(c, pad, jy + floor((h - px(16) - jy - jh) / 2), jw, jh, done, target, px, jarLook(tone))
+        lx = pad + jw + px(30)
+    end
     local pill_h = fpx(56)
-    local big_px = fpx(strip and 120 or 150)
+    local big_px = fpx(strip and 120 or (lx > pad and 120 or 150))
     local big = c:text(yr and tostring(done) or "\xE2\x80\xA6", big_px, { bold = true, color = tone.fg })
     local of_txt = T("of ") .. A.plural(target, "book", "books")
 
@@ -684,7 +1182,7 @@ function P.goal.build(env)
         pill_x, pill_y = w - pad - pill_w, floor((h - pill_h) / 2)
         band_bottom = h - px(10)
     else
-        pill_x, pill_w = pad, w - 2 * pad
+        pill_x, pill_w = lx, w - pad - lx
         pill_y = h - px(26) - pill_h
         band_bottom = pill_y
         -- no room for both: the number wins
@@ -692,8 +1190,8 @@ function P.goal.build(env)
     end
 
     local by = top + floor((band_bottom - top - big.h) / 2) - round(big.h * 0.02)
-    c:put(big, pad - round(big_px * 0.04), by)
-    local ox = pad + big.w + px(16)
+    c:put(big, lx - round(big_px * 0.04), by)
+    local ox = lx + big.w + px(16)
     local limit = (strip and pill_x - px(16)) or (w - pad + px(8))
     local t_of = c:text(of_txt, fpx(28), { color = tone.accent2 })
     if ox + t_of.w > limit then t_of = c:text("/ " .. target, fpx(28), { color = tone.accent2 }) end
@@ -702,8 +1200,15 @@ function P.goal.build(env)
     end
     if pill_y then
         c:rrect(pill_x, pill_y, pill_w, pill_h, pill_h / 2, tone.btn)
-        c:label(status, fpx(26), pill_x + pill_w / 2, pill_y + pill_h / 2,
-            { bold = true, color = tone.btn_fg, anchor = "c", valign = "mid", max_w = pill_w - px(30) })
+        -- a smaller size before it gets cut short
+        local size = fpx(26)
+        for _ = 1, 3 do
+            local probe = c:text(status, size, { bold = true, color = tone.btn_fg })
+            if probe.w <= pill_w - px(30) or size <= minFont() then break end
+            size = max(minFont(), floor(size * 0.88))
+        end
+        local t_st = c:text(status, size, { bold = true, color = tone.btn_fg, max_w = pill_w - px(30) })
+        c:put(t_st, pill_x + pill_w / 2, pill_y + pill_h / 2, "c", "mid")
     end
     return c
 end
@@ -1190,27 +1695,47 @@ function P.week.build(env)
     c:label(total, fpx(24), w - pad, px(24) + t_head.base, { bold = true, color = tone.fg, anchor = "r", valign = "base" })
 
     local t_day = c:text("M", fpx(20), { bold = true })
-    local base_y = h - px(22) - t_day.h - px(8)
+    local cozy = cozyOn()
+    local shelf_th = cozy and max(4, px(9)) or 0
+    local base_y = h - px(22) - t_day.h - px(8) - shelf_th
     local top = px(24) + t_head.h + px(18)
     local area = max(4, base_y - top)
     local col_w = (w - 2 * pad) / 7
-    local bar_w = max(4, floor(col_w * 0.5))
+    local bar_w = max(4, floor(col_w * (cozy and 0.56 or 0.5)))
     local week = st and st.week or {}
     local top_v = 1
+    local best_i, best_v = nil, 0
     for i = 1, 7 do
         local d = week[i]
-        if d then top_v = max(top_v, by_minutes and d.secs or d.pages) end
+        if d then
+            local v = by_minutes and d.secs or d.pages
+            top_v = max(top_v, v)
+            if v > best_v then best_i, best_v = i, v end
+        end
+    end
+    local heart_s = min(max(bar_w * 0.8, px(16)), px(32))
+    if cozy then
+        area = area - heart_s - px(2)
+        shelf(c, pad, base_y, w - 2 * pad, px, tone)
     end
     for i = 1, 7 do
         local d = week[i] or { pages = 0, secs = 0, wday = ((D.weekStart() + i - 2) % 7) + 1, future = true }
         local v = by_minutes and d.secs or d.pages
         local cx = pad + (i - 1) * col_w + col_w / 2
         local x = floor(cx - bar_w / 2)
-        local bh = v > 0 and max(bar_w, round(area * v / top_v)) or max(3, px(6))
-        bh = min(bh, area)
-        local col = v <= 0 and tone.track or (d.today and tone.accent or tone.accent2)
-        c:rrect(x, base_y - bh, bar_w, bh, min(bar_w / 2, px(10)), col)
-        c:label(DAY_LETTERS[d.wday] or "", fpx(20), cx, base_y + px(8),
+        if cozy then
+            if v > 0 then
+                local bh = min(area, max(px(10), round(area * v / top_v)))
+                spineUp(c, x, base_y, bar_w, bh, d.today and tone.accent or spineColour(i, tone), px)
+                if i == best_i then bestHeart(c, cx, base_y - bh, heart_s, tone, px) end
+            end
+        else
+            local bh = v > 0 and max(bar_w, round(area * v / top_v)) or max(3, px(6))
+            bh = min(bh, area)
+            local col = v <= 0 and tone.track or (d.today and tone.accent or tone.accent2)
+            c:rrect(x, base_y - bh, bar_w, bh, min(bar_w / 2, px(10)), col)
+        end
+        c:label(DAY_LETTERS[d.wday] or "", fpx(20), cx, base_y + shelf_th + px(8),
             { anchor = "c", bold = true, color = d.today and tone.accent or tone.label })
     end
     return c
@@ -1772,6 +2297,8 @@ function P.bookclub.build(env)
     bwid = w - 2 * pad
 
     -- this month's picks, side by side
+    local garden = env.cfg("look", "classic") == "garden"
+    local gl = garden and gardenLook(tone) or nil
     local top = px(24) + t_head.h + px(14)
     local area_h = bar_y - px(20) - top
     local picks = st.picks
@@ -1802,19 +2329,24 @@ function P.bookclub.build(env)
             end
             local cy = top + floor((area_h - cover_h) / 2)
             c:cover(b.fp, x, cy, cover_w, cover_h, { title = b.title, edge = tone.muted })
+            if garden and b.finished then dragonflySticker(c, x, cy, cover_w, cover_h, px, gl) end
             local tx = x + cover_w + px(20)
             local tw = col_w - cover_w - px(20)
-            -- bottom of the column: status over a small progress bar
-            local mb_h = max(4, px(9))
+            -- bottom of the column: status over a small progress bar (or a stem)
+            local mb_h = garden and max(px(20), min(px(44), floor(cover_h * 0.3))) or max(4, px(9))
             local status = b.finished and T("Finished") or (b.pct > 0 and string.format("%d%%", floor(b.pct * 100 + 0.5)) or T("Not started"))
             local t_status = c:text(status, fpx(22), { bold = true, max_w = tw,
                 color = (b.finished and tone.accent) or (b.pct > 0 and tone.fg) or tone.muted })
             -- the words run the cover's height, so a short cover (a narrow
             -- card) has its title beside it rather than above it
             local mb_y = cy + cover_h - mb_h
-            c:rrect(tx, mb_y, tw, mb_h, mb_h / 2, tone.track)
-            if b.pct > 0 then
-                c:rrect(tx, mb_y, max(mb_h, round(tw * b.pct)), mb_h, mb_h / 2, tone.accent, tone.track)
+            if garden then
+                gardenStem(c, tx, mb_y, tw, mb_h, b.pct, b.finished, px, gl)
+            else
+                c:rrect(tx, mb_y, tw, mb_h, mb_h / 2, tone.track)
+                if b.pct > 0 then
+                    c:rrect(tx, mb_y, max(mb_h, round(tw * b.pct)), mb_h, mb_h / 2, tone.accent, tone.track)
+                end
             end
             local st_y = mb_y - px(6) - t_status.h
             c:put(t_status, tx, st_y)
@@ -1863,6 +2395,7 @@ function P.week_rings.build(env)
     end
     local pad = px(28)
     local cols = tone.series
+    if hearts() then cols = { heartColors(tone) } end
     -- the same daily goals as the Activity rings card
     local page_goal = max(1, tonumber(A.get("activity_page_goal", 30)) or 30)
     local min_goal = D.dailyMinutesGoal()
@@ -1920,13 +2453,17 @@ function P.week_rings.build(env)
                 { anchor = "c", bold = true, color = day.today and tone.accent or tone.label })
             local fp = day.future and 0 or day.pages / page_goal
             local fm = day.future and 0 or (day.secs / 60) / min_goal
-            -- a ring with nothing in it is all track: no start dot
-            c:ring(cx, cy, R, t, fp, tone.track, fp > 0 and cols[1] or tone.track)
-            c:ring(cx, cy, R - t - gap, t, fm, tone.track, fm > 0 and cols[2] or tone.track)
-            local hole = R - 2 * t - 2 * gap
-            if fp >= 1 and fm >= 1 and hole >= 2 then
-                -- both goals met: fill the middle
-                c:disc(cx, cy, max(1.5, hole * 0.7), cols[3])
+            if hearts() then
+                dayHeart(c, cx, cy, d, tone, fp, fm, { future = day.future, past = not day.future and not day.today })
+            else
+                -- a ring with nothing in it is all track: no start dot
+                c:ring(cx, cy, R, t, fp, tone.track, fp > 0 and cols[1] or tone.track)
+                c:ring(cx, cy, R - t - gap, t, fm, tone.track, fm > 0 and cols[2] or tone.track)
+                local hole = R - 2 * t - 2 * gap
+                if fp >= 1 and fm >= 1 and hole >= 2 then
+                    -- both goals met: fill the middle
+                    c:disc(cx, cy, max(1.5, hole * 0.7), cols[3])
+                end
             end
         end
     end
@@ -1964,6 +2501,7 @@ function P.month_rings.build(env)
     end
     local pad = px(28)
     local cols = tone.series
+    if hearts() then cols = { heartColors(tone) } end
     -- the same daily goals as the Activity and Week rings cards
     local page_goal = max(1, tonumber(A.get("activity_page_goal", 30)) or 30)
     local min_goal = D.dailyMinutesGoal()
@@ -2053,15 +2591,19 @@ function P.month_rings.build(env)
             local future = d > today
             local fp = future and 0 or (rec.pages or 0) / page_goal
             local fm = future and 0 or ((rec.secs or 0) / 60) / min_goal
-            -- a ring with nothing in it is all track: no start dot
-            c:ring(cx, cy, R, t, fp, tone.track, fp > 0 and cols[1] or tone.track)
-            if two then
-                c:ring(cx, cy, R - t - gap, t, fm, tone.track, fm > 0 and cols[2] or tone.track)
-                local hole = R - 2 * t - 2 * gap
-                if fp >= 1 and fm >= 1 and hole >= 2 then c:disc(cx, cy, max(1.5, hole * 0.7), cols[3]) end
-            elseif fm >= 1 and R - t >= 3 then
-                -- one ring only: the minutes goal shows as a filled middle
-                c:disc(cx, cy, max(1.5, (R - t) * 0.6), cols[2])
+            if hearts() then
+                dayHeart(c, cx, cy, d_ring, tone, fp, fm, { future = future, past = d < today, single = not two })
+            else
+                -- a ring with nothing in it is all track: no start dot
+                c:ring(cx, cy, R, t, fp, tone.track, fp > 0 and cols[1] or tone.track)
+                if two then
+                    c:ring(cx, cy, R - t - gap, t, fm, tone.track, fm > 0 and cols[2] or tone.track)
+                    local hole = R - 2 * t - 2 * gap
+                    if fp >= 1 and fm >= 1 and hole >= 2 then c:disc(cx, cy, max(1.5, hole * 0.7), cols[3]) end
+                elseif fm >= 1 and R - t >= 3 then
+                    -- one ring only: the minutes goal shows as a filled middle
+                    c:disc(cx, cy, max(1.5, (R - t) * 0.6), cols[2])
+                end
             end
             if current and d == today then
                 -- today: a short bar under its rings
@@ -2285,21 +2827,38 @@ function P.year_chart.build(env)
     -- the two lines, up to this month; pages underneath, books on top
     local lw = max(2, round(4.5 * s))
     local dot = max(2.5, 6 * s)
-    local function series(values, top, colour)
+    local cozy = cozyOn()
+    local function curve(values, top)
         local ys = {}
         local xs_c = {}
         for m = 1, cur do
             xs_c[m] = xs[m]
             ys[m] = plot_bottom - ph * min(1, values[m] / top)
         end
-        c:polyline(smoothPoints(xs_c, ys, 16), lw, colour)
-        return xs_c, ys
+        return xs_c, ys, smoothPoints(xs_c, ys, 16)
     end
-    local pxs, pys
-    if have_pages then pxs, pys = series(pages, top_p, cols[2]) end
-    local bxs, bys = series(books, top_b, cols[1])
-    if pxs then for m = 1, cur do c:disc(pxs[m], pys[m], dot, cols[2]) end end
-    for m = 1, cur do c:disc(bxs[m], bys[m], dot, cols[1]) end
+    local pxs, pys, ppts
+    if have_pages then pxs, pys, ppts = curve(pages, top_p) end
+    local bxs, bys, bpts = curve(books, top_b)
+    if cozy then
+        -- soft hills under the lines, pages behind books
+        if ppts then hill(c, ppts, floor(plot_bottom), A.mix(tone.bg, cols[2], tone.dark and 0.3 or 0.16)) end
+        hill(c, bpts, floor(plot_bottom), A.mix(tone.bg, cols[1], tone.dark and 0.3 or 0.16))
+    end
+    if ppts then c:polyline(ppts, lw, cols[2]) end
+    c:polyline(bpts, lw, cols[1])
+    if cozy then
+        local hs = max(px(12), dot * 3.2)
+        local gl = gardenLook(tone)
+        if pxs then for m = 1, cur - 1 do pointHeart(c, pxs[m], pys[m], hs, cols[2], px) end end
+        for m = 1, cur - 1 do pointHeart(c, bxs[m], bys[m], hs, cols[1], px) end
+        -- the latest month: a heart for pages, a flower for books
+        if pxs then pointHeart(c, pxs[cur], pys[cur], hs * 1.2, cols[2], px) end
+        c:sprite(bxs[cur], bys[cur], hs * 1.9, 0, bloomParts(gl), { lw = max(1, px(2)) })
+    else
+        if pxs then for m = 1, cur do c:disc(pxs[m], pys[m], dot, cols[2]) end end
+        for m = 1, cur do c:disc(bxs[m], bys[m], dot, cols[1]) end
+    end
     return c
 end
 
@@ -2384,8 +2943,10 @@ local function barChart(c, tone, s, ts, o)
         wl = max(wl, ylab[i].w)
     end
     local t_x = c:text("0", fpx(19), { bold = true })
+    local cozy = cozyOn()
+    local shelf_th = cozy and max(4, px(9)) or 0
     local plot_top = o.y + floor(ylab[4].h / 2)
-    local plot_bottom = o.y + o.h - t_x.h - px(8)
+    local plot_bottom = o.y + o.h - t_x.h - px(8) - shelf_th
     local x0 = o.x + wl + px(12)
     local x1 = o.x + o.w
     if plot_bottom - plot_top < px(24) or x1 - x0 < n * 3 then return end
@@ -2393,11 +2954,23 @@ local function barChart(c, tone, s, ts, o)
     local grid_w = max(1, px(2))
     for i = 0, 4 do
         local gy = floor(plot_bottom - ph * i / 4 + 0.5)
-        c:rect(x0, gy - floor(grid_w / 2), x1 - x0, grid_w, i == 0 and A.mix(tone.track, tone.fg, 0.35) or tone.track)
+        if not (cozy and i == 0) then
+            c:rect(x0, gy - floor(grid_w / 2), x1 - x0, grid_w, i == 0 and A.mix(tone.track, tone.fg, 0.35) or tone.track)
+        end
         c:put(ylab[i], x0 - px(12), gy, "r", "mid")
     end
     local col_w = (x1 - x0) / n
-    local bar_w = max(2, floor(col_w * (o.bar_k or 0.6)))
+    local bar_w = max(2, floor(col_w * (o.bar_k or (cozy and 0.72 or 0.6))))
+    if cozy then shelf(c, x0, floor(plot_bottom + 0.5), x1 - x0, px, tone) end
+    -- the best slot gets a heart
+    local best_i, best_v = nil, 0
+    if cozy then
+        for i = 1, n do
+            local v = o.values[i]
+            if v and v > best_v then best_i, best_v = i, v end
+        end
+    end
+    local heart_s = min(max(bar_w * 1.25, px(14)), px(30))
     local radius = min(floor(bar_w / 2), px(6))
     local base = floor(plot_bottom + 0.5) - floor(grid_w / 2)
     local stub = max(2, px(4))
@@ -2408,12 +2981,21 @@ local function barChart(c, tone, s, ts, o)
         local is_cur = (i == o.current)
         if v then
             local bh = (v > 0) and max(stub, round(ph * min(1, v / top))) or 0
+            if bh > 0 and cozy then
+                spineUp(c, bx, floor(plot_bottom + 0.5), bar_w, bh, is_cur and tone.accent or spineColour(i, tone), px)
+                if i == best_i then
+                    bestHeart(c, cx, floor(plot_bottom + 0.5) - bh, heart_s, tone, px)
+                    bh = bh + heart_s + px(2)
+                end
+            end
             if bh > 0 then
-                local col = is_cur and tone.accent or tone.accent2
-                -- rounded on top, square where it stands on the axis
-                local r = min(radius, floor(bh / 2))
-                c:rrect(bx, base - bh, bar_w, bh, r, col, tone.bg)
-                if bh > r and r > 0 then c:rect(bx, base - r, bar_w, r, col) end
+                if not cozy then
+                    local col = is_cur and tone.accent or tone.accent2
+                    -- rounded on top, square where it stands on the axis
+                    local r = min(radius, floor(bh / 2))
+                    c:rrect(bx, base - bh, bar_w, bh, r, col, tone.bg)
+                    if bh > r and r > 0 then c:rect(bx, base - r, bar_w, r, col) end
+                end
                 if is_cur and o.mark then
                     -- Just over the bar. The figure is wider than a bar, so it
                     -- is slid sideways (centred, or starting at the bar's left
@@ -2427,7 +3009,8 @@ local function barChart(c, tone, s, ts, o)
                             local jx = x0 + (j - 0.5) * col_w
                             local vj = o.values[j]
                             if j ~= i and vj and vj > 0 and jx + bar_w / 2 >= mx - px(4) and jx - bar_w / 2 <= mx + t_m.w + px(4) then
-                                reach = min(reach, base - max(stub, round(ph * min(1, vj / top))))
+                                local hj = max(stub, round(ph * min(1, vj / top))) + ((j == best_i) and (heart_s + px(2)) or 0)
+                                reach = min(reach, base - hj)
                             end
                         end
                         return reach
@@ -2445,7 +3028,7 @@ local function barChart(c, tone, s, ts, o)
         end
         local lab = o.labels[i]
         if lab then
-            c:label(lab, fpx(19), cx, plot_bottom + px(8),
+            c:label(lab, fpx(19), cx, plot_bottom + shelf_th + px(8),
                 { anchor = "c", bold = true, color = is_cur and tone.fg or tone.label })
         end
         if o.region then c:region(o.region .. i, cx - col_w / 2, plot_top, col_w, o.y + o.h - plot_top) end
@@ -2845,28 +3428,45 @@ function P.when_read.build(env)
 
     -- 24 bars, one per hour; the busiest part of the day in the first accent
     local t_hl = c:text("12a", fpx(18), { bold = true })
-    local plot_bottom = hist_bottom - t_hl.h - px(6)
+    local cozy = cozyOn()
+    local shelf_th = cozy and max(4, px(9)) or 0
+    local plot_bottom = hist_bottom - t_hl.h - px(6) - shelf_th
     local ph = plot_bottom - y
     if ph >= px(20) then
         local col_w = (w - 2 * pad) / 24
-        local bar_w = max(2, floor(col_w * 0.66))
+        local bar_w = max(2, floor(col_w * (cozy and 0.76 or 0.66)))
         local radius = min(floor(bar_w / 2), px(4))
         local top_v = 0
         for hr = 0, 23 do top_v = max(top_v, hours[hr]) end
-        c:rect(pad, plot_bottom, w - 2 * pad, max(1, px(2)), A.mix(tone.track, tone.fg, 0.35))
+        local heart_s = min(max(bar_w * 1.3, px(14)), px(26))
+        if cozy then
+            -- room for the heart over the busiest hour
+            ph = ph - heart_s - px(2)
+            shelf(c, pad, plot_bottom, w - 2 * pad, px, tone)
+        else
+            c:rect(pad, plot_bottom, w - 2 * pad, max(1, px(2)), A.mix(tone.track, tone.fg, 0.35))
+        end
         for hr = 0, 23 do
             local cx = pad + (hr + 0.5) * col_w
             local v = hours[hr]
             if v > 0 then
                 local bh = max(max(2, px(4)), round(ph * v / top_v))
-                local col = partOf(hr) == peak_part and tone.accent or tone.accent2
                 local bx = floor(cx - bar_w / 2)
-                local r = min(radius, floor(bh / 2))
-                c:rrect(bx, plot_bottom - bh, bar_w, bh, r, col, tone.bg)
-                if bh > r and r > 0 then c:rect(bx, plot_bottom - r, bar_w, r, col) end
+                if cozy then
+                    -- the busiest part of the day in full colour, the rest paler
+                    local col = spineColour(hr + 1, tone)
+                    if partOf(hr) ~= peak_part then col = A.mix(col, tone.bg, 0.45) end
+                    spineUp(c, bx, plot_bottom, bar_w, bh, col, px)
+                    if hr == peak_hr then bestHeart(c, cx, plot_bottom - bh, heart_s, tone, px) end
+                else
+                    local col = partOf(hr) == peak_part and tone.accent or tone.accent2
+                    local r = min(radius, floor(bh / 2))
+                    c:rrect(bx, plot_bottom - bh, bar_w, bh, r, col, tone.bg)
+                    if bh > r and r > 0 then c:rect(bx, plot_bottom - r, bar_w, r, col) end
+                end
             end
             if hr % 6 == 0 then
-                c:label(hourName(hr, true), fpx(18), pad + hr * col_w, plot_bottom + px(6),
+                c:label(hourName(hr, true), fpx(18), pad + hr * col_w, plot_bottom + shelf_th + px(6),
                     { bold = true, color = tone.label })
             end
         end
@@ -3007,6 +3607,35 @@ local function trendValue(item, v)
     return A.thousands(floor(v + 0.5))
 end
 
+-- The sticky notes' little drawings: a sprout growing (up), a leaf drooping
+-- (down), a small sun (holding steady / not enough yet).
+local function trendDoodle(c, cx, cy, r, dir, tone, px)
+    local L = gardenLook(tone)
+    local rad = math.rad
+    if dir == "up" then
+        c:sprite(cx, cy + r * 0.25, r * 2.1, 0, {
+            { "s", 0, 0.42, 0, -0.06, 0.05, L.stem },
+            { "v", 0, -0.02, 0.5, 0.17, rad(-150), L.leaf, L.leaf_line, true },
+            { "v", 0, -0.04, 0.58, 0.19, rad(-30), L.leaf, L.leaf_line, true },
+            { "e", 0, 0.46, 0.3, 0.07, 0, A.mix(L.leaf_line, { 120, 80, 40 }, 0.6) },
+        }, { lw = max(1, px(2)) })
+    elseif dir == "down" then
+        local dry, dry_line = { 196, 176, 104 }, { 140, 120, 60 }
+        c:sprite(cx, cy, r * 2.1, 0, {
+            { "s", -0.3, -0.42, -0.06, -0.12, 0.045, dry_line },
+            { "v", -0.08, -0.14, 0.62, 0.2, rad(62), dry, dry_line, true },
+        }, { lw = max(1, px(2)) })
+    else
+        local sun = { 255, 204, 80 }
+        local parts = { { "e", 0, 0, 0.22, 0.22, 0, sun, { 226, 160, 40 } } }
+        for k = 0, 7 do
+            local a = k * math.pi / 4
+            parts[#parts + 1] = { "s", 0.32 * math.cos(a), 0.32 * math.sin(a), 0.44 * math.cos(a), 0.44 * math.sin(a), 0.045, sun }
+        end
+        c:sprite(cx, cy, r * 2, 0, parts, { lw = max(1, px(2)) })
+    end
+end
+
 -- A chevron in a circle: up, down, or a dash for "not yet".
 local function trendBadge(c, cx, cy, r, dir, col, disc)
     c:disc(cx, cy, r, disc)
@@ -3136,6 +3765,10 @@ function P.trends.build(env)
 
     local tile_bg = A.mix(tone.bg, tone.fg, tone.dark and 0.14 or 0.07)
     local disc_bg = tone.dark and A.mix(tone.bg, tone.fg, 0.24) or tone.bg
+    -- the Sticky notes look: each trend on a pastel note with a bit of tape
+    local notes = A.get("trends_look", "plain") == "notes"
+    local NOTE = { { 255, 240, 158 }, { 255, 214, 228 }, { 204, 240, 218 }, { 208, 226, 252 }, { 230, 216, 252 }, { 255, 224, 196 } }
+    local note_i = 0
     local y = top + max(0, floor((H - total) / 2 * 0.4))
     for gi, g in ipairs(groups) do
         if titles then
@@ -3150,12 +3783,29 @@ function P.trends.build(env)
             local x = pad + col_i * (tw + gap)
             local ty = y + row_i * (L.th + gap)
             local th = L.th
-            c:rrect(x, ty, tw, th, min(px(24), floor(tile_h / 3)), tile_bg)
+            local note_bg
+            if notes then
+                note_i = note_i + 1
+                local pastel = NOTE[(note_i - 1) % #NOTE + 1]
+                note_bg = tone.dark and A.mix(tone.bg, pastel, 0.3) or pastel
+                local sh = max(2, px(4))
+                c:rrect(x + sh, ty + sh, tw, th, px(4), A.mix(tone.bg, { 0, 0, 0 }, tone.dark and 0.5 or 0.14))
+                c:rrect(x, ty, tw, th, px(4), note_bg)
+                -- a darker strip where the note is stuck down
+                c:rect(x, ty, tw, max(2, px(5)), A.mix(note_bg, { 0, 0, 0 }, 0.06))
+            else
+                c:rrect(x, ty, tw, th, min(px(24), floor(tile_h / 3)), tile_bg)
+            end
             local k = tile_h / base_h
             local r = floor(tile_h * 0.27)
             local col = (it.group == "more") and tone.muted or colour[it.id]
             local bx, by = x + px(16) + r, ty + floor(tile_h / 2)
-            trendBadge(c, bx, by, r, it.group == "keep" and "up" or (it.group == "look" and "down" or "flat"), col, disc_bg)
+            local dir = it.group == "keep" and "up" or (it.group == "look" and "down" or "flat")
+            if notes then
+                trendDoodle(c, bx, by, r, dir, tone, px)
+            else
+                trendBadge(c, bx, by, r, dir, col, disc_bg)
+            end
             local tx = bx + r + px(18)
             local room = x + tw - tx - px(14)
             local f_name, f_val, f_unit = fpx(24 * k), fpx(36 * k), fpx(20 * k)
@@ -3164,19 +3814,47 @@ function P.trends.build(env)
             local t_unit = c:text(it.unit, f_unit, { bold = true, caps = true, color = col, max_w = max(8, room - t_val.w - px(6)) })
             local block = t_name.h + t_val.h - floor(t_val.h * 0.18)
             local ny = ty + floor((tile_h - block) / 2)
-            c:put(t_name, tx, ny)
             local base_y = ny + t_name.h - floor(t_val.h * 0.18) + t_val.base
+            if notes then
+                -- a highlighter swoosh under the figure, a little wavy
+                local sw = t_val.w + px(5) + t_unit.w + px(8)
+                local sy = base_y - floor(t_val.px * 0.16)
+                local lw_ = max(4, floor(t_val.px * 0.42))
+                local deeper = tone.dark and A.mix(note_bg, { 255, 255, 255 }, 0.18)
+                    or { note_bg[1] - (255 - note_bg[1]), note_bg[2] - (255 - note_bg[2]), note_bg[3] - (255 - note_bg[3]) }
+                c:polyline({ tx - px(4), sy + px(2), tx + sw * 0.35, sy - px(1), tx + sw * 0.7, sy + px(1), tx + sw, sy - px(2) },
+                    lw_, deeper, note_bg)
+            end
+            c:put(t_name, tx, ny)
             c:put(t_val, tx, base_y, "l", "base")
             c:put(t_unit, tx + t_val.w + px(5), base_y, "l", "base")
             -- the year's figure, when there is room for it
             if it.base and it.group ~= "more" then
                 local t_year = c:text(T("year ") .. trendValue(it, it.base), fpx(19 * k), { bold = true, color = tone.label })
                 local ex = tx + t_val.w + px(5) + t_unit.w + px(16)
-                if ex + t_year.w <= x + tw - px(14) then c:put(t_year, x + tw - px(14), base_y, "r", "base") end
+                -- (clear of the folded corner on a sticky note)
+                local rx = x + tw - px(14) - (notes and max(px(10), min(floor(th * 0.26), px(26))) or 0)
+                if ex + t_year.w <= rx then c:put(t_year, rx, base_y, "r", "base") end
             end
             if L.wide and it.hint then
                 local t_h = c:textbox(it.hint, hint_size, tw - (tx - x) - px(14), 2, { color = tone.muted })
                 c:put(t_h, tx, ty + tile_h - px(6))
+            end
+            if notes then
+                -- the bottom right corner folded over
+                local f = max(px(10), min(floor(th * 0.26), px(26)))
+                c:sprite(x + tw, ty + th, f, 0, {
+                    { "t", -1, 0, 0, -1, 0, 0, A.mix(tone.bg, { 0, 0, 0 }, tone.dark and 0.5 or 0.14), nil },
+                    { "t", -1, 0, 0, -1, -1, -1, A.mix(note_bg, { 0, 0, 0 }, tone.dark and 0.2 or 0.12),
+                        A.mix(note_bg, { 0, 0, 0 }, 0.25) },
+                }, { lw = 1 })
+                -- a bit of tape across the top, a little crooked
+                local tape_w = min(tw * 0.3, px(110))
+                local turn = math.rad((note_i % 2 == 0) and 4 or -4)
+                local tcol = (note_i % 2 == 0) and { 248, 206, 220 } or { 200, 232, 218 }
+                c:sprite(x + tw - tape_w * 0.62, ty + px(1), tape_w, turn,
+                    { { "r", 0, 0, 0.5, 0.16, 0, 0.02, tone.dark and A.mix(tone.bg, tcol, 0.55) or tcol,
+                        A.mix(tcol, { 0, 0, 0 }, 0.15) } }, { lw = 1 })
             end
         end
         local n_rows = math.ceil(#g.items / L.per)
@@ -3203,6 +3881,21 @@ local SAMPLE_CHALLENGE = {
     metric = "pages", target = 6000, done = 4210, frac = 4210 / 6000, n_days = 31, day = 18, left_days = 13,
     remaining = 1790, per_day = 128, complete = false, on_pace = true, auto_metric = true, auto_target = true,
 }
+
+-- ─── the challenge as a flower ───────────────────────────────────────────────
+local PINK = { 246, 166, 200 }
+local function flowerLook(tone)
+    if tone.dark then
+        return { fills = { { 255, 120, 180 }, { 255, 152, 200 }, { 255, 188, 216 }, { 255, 92, 160 } },
+            line = { 255, 112, 176 }, empty_line = A.mix(tone.bg, PINK, 0.45), empty = A.mix(tone.bg, PINK, 0.14),
+            leaf = { 104, 172, 104 }, leaf_line = { 156, 216, 150 }, sparkle = { 255, 210, 90 } }, { 255, 136, 187 }
+    end
+    return { fills = { { 222, 84, 148 }, { 236, 126, 176 }, PINK, { 196, 40, 112 } },
+        line = { 190, 50, 120 }, empty_line = { 236, 170, 200 }, empty = A.mix(tone.bg, PINK, 0.16),
+        leaf = { 120, 178, 110 }, leaf_line = { 70, 128, 72 }, sparkle = { 236, 170, 30 } }, { 190, 50, 120 }
+end
+local function flowerOn() return A.get("challenge_style", "ring") == "flower" end
+A.flowerLook = flowerLook
 
 local function challengeGoal(ch)
     if ch.metric == "minutes" then
@@ -3265,16 +3958,25 @@ function P.challenge.build(env)
     local avail = h - top - px(22)
     local R = min(px(118), floor(avail / 2), floor(w * 0.24))
     local cx, cy = pad + R, top + floor(avail / 2)
-    local t = max(4, round(R * 0.25))
-    c:ring(cx, cy, R, t, min(1, ch.frac), tone.track, col)
     local pct = floor(ch.frac * 100 + 0.5)
-    c:label(pct .. "%", fpx(34 * R / px(118)), cx, cy, { bold = true, anchor = "c", valign = "mid", color = tone.fg })
+    local flower = flowerOn()
+    if flower then
+        -- a peony coloured in petal by petal; the leaves reach a little past R
+        local look
+        look, col = flowerLook(tone)
+        look.frac = ch.frac
+        c:flower(cx, cy, floor(R * 0.9), look)
+    else
+        local t = max(4, round(R * 0.25))
+        c:ring(cx, cy, R, t, min(1, ch.frac), tone.track, col)
+        c:label(pct .. "%", fpx(34 * R / px(118)), cx, cy, { bold = true, anchor = "c", valign = "mid", color = tone.fg })
+    end
 
     local tx = cx + R + px(34)
     local room = w - pad - tx
     local lines = {
         { challengeGoal(ch), 30, tone.fg, true },
-        { challengeDone(ch), 24, col, true },
+        { challengeDone(ch) .. (flower and ("  \xC2\xB7  " .. pct .. "%") or ""), 24, col, true },
         { challengeNeed(ch), 21, ch.complete and col or tone.muted, true },
     }
     local status = (not ch.complete) and (ch.on_pace and T("On pace") or T("Behind pace")) or nil
@@ -3352,8 +4054,15 @@ function P.challenge.build(env)
             line[#line + 1] = X(d)
             line[#line + 1] = Y(ch.series[d])
         end
-        c:polyline(line, lw, col)
-        c:disc(floor(X(#ch.series)), floor(Y(ch.series[#ch.series])), max(3, px(7)), col)
+        if cozyOn() then
+            hill(c, line, floor(gy1), A.mix(tone.bg, col, tone.dark and 0.3 or 0.16))
+            c:polyline(line, lw, col)
+            c:sprite(X(#ch.series), Y(ch.series[#ch.series]), max(px(26), px(30)), 0, bloomParts(gardenLook(tone)),
+                { lw = max(1, px(2)) })
+        else
+            c:polyline(line, lw, col)
+            c:disc(floor(X(#ch.series)), floor(Y(ch.series[#ch.series])), max(3, px(7)), col)
+        end
         c:label("1", fpx(19), gx0, gy1 + px(8), { bold = true, color = tone.label })
         c:label(tostring(ch.n_days), fpx(19), gx1, gy1 + px(8), { bold = true, anchor = "r", color = tone.label })
     end
@@ -3379,6 +4088,47 @@ local function whenText(fc)
     if fc.days <= 0 then return T("Today"), T("at your pace") end
     if fc.days == 1 then return T("Tomorrow"), T("at your pace") end
     return A.date("%b", fc.when) .. " " .. tonumber(os.date("%d", fc.when)), T("in ") .. fc.days .. T(" days")
+end
+
+-- ─── the forecast as a desk calendar ─────────────────────────────────────────
+-- The Calendar look: the finish date on a little tear-off calendar page,
+-- the day circled with a heart, washi tape at the top; the other books get a
+-- date sticker each.
+
+local function calendarPageOn() return A.get("forecast_look", "plain") == "calendar" end
+local function calPage(c, x, y, pw, ph, when, px, fpx, tone)
+    local paper = { 255, 254, 250 }
+    local band = { 232, 98, 142 }
+    local fill, line = cozyHeart(tone)
+    c:rrect(x + max(2, px(4)), y + max(2, px(5)), pw, ph, px(8), A.mix(tone.bg, { 0, 0, 0 }, tone.dark and 0.5 or 0.16))
+    c:rrect(x, y, pw, ph, px(8), paper)
+    local bh = floor(ph * 0.28)
+    c:rrect(x, y, pw, bh, px(8), band, paper)
+    c:rect(x, y + bh - px(8), pw, px(8), band)
+    -- the tear line under the month
+    local dash = max(2, px(5))
+    for xx = x + px(6), x + pw - px(6) - dash, dash * 2 do c:rect(xx, y + bh + px(4), dash, max(1, px(2)), { 214, 210, 200 }) end
+    c:label(A.upper(A.date("%b", when)), floor(bh * 0.62), x + pw / 2, y + bh / 2,
+        { bold = true, anchor = "c", valign = "mid", color = { 255, 255, 255 } })
+    -- the day, circled with a heart
+    local cy = y + bh + (ph - bh) * 0.52
+    local hs = min(pw * 0.86, (ph - bh) * 0.96)
+    c:heart(x + pw / 2, cy, hs, hs, { outer = 0, line = fill, track = paper, t = max(2, px(4)) })
+    local t_day = c:text(tostring(tonumber(os.date("%d", when))), floor((ph - bh) * 0.42), { bold = true, color = { 40, 40, 40 } })
+    c:put(t_day, x + pw / 2, cy - (ph - bh) * 0.04, "c", "mid")
+    -- washi tape across the top left corner
+    c:sprite(x + pw * 0.08, y + pw * 0.06, pw * 0.55, math.rad(-40),
+        { { "r", 0, 0, 0.5, 0.14, 0, 0.02, { 200, 232, 218 }, { 150, 200, 178 } } }, { lw = 1 })
+    return line
+end
+local function dateSticker(c, xr, cy, txt, i, fpx, px, tone)
+    local t = c:text(txt, fpx(21), { bold = true, color = { 50, 50, 50 } })
+    local sw, sh = t.w + px(20), t.h + px(6)
+    local col = spineColour(i, { dark = false, bg = tone.bg })
+    c:rrect(xr - sw + px(2), cy - sh / 2 + px(3), sw, sh, sh * 0.3, A.mix(tone.bg, { 0, 0, 0 }, tone.dark and 0.5 or 0.14))
+    c:frame(xr - sw, cy - sh / 2, sw, sh, sh * 0.3, 1, A.mix(col, { 0, 0, 0 }, 0.25), col)
+    c:put(t, xr - sw / 2, cy, "c", "mid")
+    return sw
 end
 
 function P.forecast.build(env)
@@ -3438,6 +4188,10 @@ function P.forecast.build(env)
     local t_big = c:text(big, fpx(46), { bold = true, color = tone.accent, max_w = room })
     local t_small = c:text(small, fpx(21), { bold = true, color = tone.muted, max_w = room })
     local block = t_title.h + px(6) + t_big.h + t_small.h
+    local cal = calendarPageOn() and fc ~= nil
+    local page_h = cal and min(px(150), floor(area_h - t_title.h - px(14))) or 0
+    if cal and page_h < px(70) then cal = false end
+    if cal then block = t_title.h + px(14) + page_h end
     local small_n = 0
     if not wide and others > 0 then
         small_n = A.clamp(floor((area_h - block - px(10)) / row_h), 0, others)
@@ -3451,9 +4205,27 @@ function P.forecast.build(env)
     local tx = pad + cov_w + px(22)
     local y = top + max(0, floor((main_h - block) / 2))
     c:put(t_title, tx, y)
-    y = y + t_title.h + px(6)
-    c:put(t_big, tx, y)
-    c:put(t_small, tx, y + t_big.h - floor(t_big.h * 0.08))
+    if cal then
+        -- the date on a tear-off page, the weekday and "in 7 days" beside it
+        y = y + t_title.h + px(14)
+        page_h = min(page_h, main_h - (y - top))
+        local page_w = floor(page_h * 0.88)
+        calPage(c, tx, y, page_w, page_h, fc.when, px, fpx, tone)
+        local sx = tx + page_w + px(20)
+        local sroom = main_w - (sx - pad)
+        if sroom > px(60) then
+            local wd = fc.days <= 0 and T("Today") or (fc.days == 1 and T("Tomorrow") or A.date("%A", fc.when))
+            local t_wd = c:text(wd, fpx(30), { bold = true, color = tone.accent, max_w = sroom })
+            local t_in = c:text(small, fpx(21), { bold = true, color = tone.muted, max_w = sroom })
+            local by_ = y + floor((page_h - t_wd.h - t_in.h) / 2)
+            c:put(t_wd, sx, by_)
+            c:put(t_in, sx, by_ + t_wd.h)
+        end
+    else
+        y = y + t_title.h + px(6)
+        c:put(t_big, tx, y)
+        c:put(t_small, tx, y + t_big.h - floor(t_big.h * 0.08))
+    end
     c:region("book:1", pad, top, main_w, main_h, px(4))
     -- the others, one line each: under the first, or beside it on a wide card
     local lx, lw, ly
@@ -3470,10 +4242,16 @@ function P.forecast.build(env)
         local f2 = D.forecastFor(b, avg)
         local d_txt = f2 and (whenText(f2)) or "\xE2\x80\x93"
         local t_d = c:text(d_txt, fpx(22), { bold = true, color = tone.accent })
-        local t_n = c:text(b.title or "", fpx(22), { color = tone.fg, max_w = lw - t_d.w - px(20) })
+        local d_w = t_d.w
+        if calendarPageOn() and f2 then d_w = c:text(d_txt, fpx(21), { bold = true }).w + px(20) end
+        local t_n = c:text(b.title or "", fpx(22), { color = tone.fg, max_w = lw - d_w - px(20) })
         if not wide or i > 2 then c:rect(lx, ly, lw, max(1, px(2)), tone.track) end
         c:put(t_n, lx, ly + row_h / 2, "l", "mid")
-        c:put(t_d, lx + lw, ly + row_h / 2, "r", "mid")
+        if calendarPageOn() and f2 then
+            dateSticker(c, lx + lw, ly + row_h / 2, d_txt, i, fpx, px, tone)
+        else
+            c:put(t_d, lx + lw, ly + row_h / 2, "r", "mid")
+        end
         files[i] = b.fp or false
         c:region("book:" .. i, lx, ly, lw, row_h)
         ly = ly + row_h
@@ -3610,12 +4388,17 @@ local function controlPanel(c, env, x0, y0, W, Hh, px, fpx, tone, o)
         local block = b + (show_labels and (px(6) + label_h) or 0)
         local by = y0 + r_i * (row_h + px(10)) + floor((row_h - block) / 2)
         local on = (not env.sample) and D.toggleState(e) or nil
-        local fill = on and tone.btn or tile
-        c:rrect(floor(cx - b / 2), by, b, b, floor(b * 0.28), fill)
-        glyphAt(c, e.icon or "", floor(b * 0.62), cx, by + b / 2, on and tone.btn_fg or tone.fg)
+        -- a picture of the reader's own: just the picture, the size of the
+        -- whole button, with no tile behind it. Otherwise the tile and icon.
+        local drawn = e.image and c:image(e.image, cx - b / 2, by, b, b)
+        if not drawn then
+            c:rrect(floor(cx - b / 2), by, b, b, floor(b * 0.28), on and tone.btn or tile)
+            glyphAt(c, e.icon or "", floor(b * 0.62), cx, by + b / 2, on and tone.btn_fg or tone.fg)
+        end
         if show_labels then
+            -- a picture has no tile to light up: its name takes the accent while it's on
             c:label(e.label or "", fpx(19), cx, by + b + px(6), { bold = true, anchor = "c",
-                color = tone.label, max_w = cell_w - px(6) })
+                color = (drawn and on) and tone.btn or tone.label, max_w = cell_w - px(6) })
         end
         c:region(prefix .. "btn:" .. i, cx - cell_w / 2, by - px(4), cell_w, block + px(8))
     end
@@ -3787,12 +4570,18 @@ local function compareBlock(c, cmp, x, y, w, h, px, fpx, tone, compact)
         local by = yy + t_v.h - floor(t_v.h * 0.06)
         -- no figure yet: a grey stub with the label greyed beside it
         local bw_ = v and max(bar_h, floor(w * v / top_v)) or bar_h
-        local fill = (v and current) and col or tone.track
-        c:rrect(x, by, bw_, bar_h, floor(bar_h * 0.22), fill)
+        local cozy = cozyOn()
+        if cozy then
+            local fill = not v and tone.track or (current and spineColour(1, tone) or A.mix(spineColour(2, tone), tone.bg, 0.25))
+            spineFlat(c, x, by, bw_, bar_h, fill, px)
+        else
+            local fill = (v and current) and col or tone.track
+            c:rrect(x, by, bw_, bar_h, floor(bar_h * 0.22), fill)
+        end
         -- the label inside its bar, or just past a bar too short to hold it
         local probe = c:text(label or "", f_bar, { bold = true })
         local inside = v ~= nil and bw_ >= probe.w + px(32)
-        local l_col = not v and tone.muted or (inside and current) and tone.btn_fg or tone.fg
+        local l_col = not v and tone.muted or (inside and current and not cozy) and tone.btn_fg or tone.fg
         local t_l = c:text(label or "", f_bar, { bold = true, color = l_col,
             max_w = max(8, w - px(28) - (inside and 0 or bw_)) })
         c:put(t_l, inside and (x + px(16)) or (x + bw_ + px(12)), by + bar_h / 2, "l", "mid")
@@ -4230,11 +5019,131 @@ local function fitQuote(c, text, w, room, top_px, floor_px, tone)
     end
 end
 
-function P.quote.build(env)
+-- ─── notebook paper ──────────────────────────────────────────────────────────
+-- The quote cards' Notebook paper look: a sheet of lined paper with a margin
+-- line and punched holes, the quote written on the lines, washi tape across
+-- the top corners.
+
+local function paperOn() return A.get("quote_look", "plain") == "paper" end
+local function paperLook(tone)
+    if tone.dark then
+        return { paper = { 40, 40, 46 }, rule = { 64, 84, 116 }, margin = { 150, 70, 96 }, edge = { 70, 70, 78 },
+            tape = { 214, 150, 176 }, tape_line = { 240, 190, 210 }, tape2 = { 120, 180, 160 }, tape2_line = { 170, 220, 200 } }
+    end
+    return { paper = { 255, 254, 248 }, rule = { 176, 206, 234 }, margin = { 236, 146, 166 }, edge = { 214, 212, 204 },
+        tape = { 248, 200, 216 }, tape_line = { 228, 160, 186 }, tape2 = { 196, 230, 214 }, tape2_line = { 150, 200, 178 } }
+end
+A.paperLook = paperLook
+
+-- A quote card: heading and Another at the top, the words as large as they
+-- fit, the source underneath. o = { head, text, source, sub (a line under the
+-- source), extra (smaller text under the words), mark (false: no quote mark),
+-- fp (what a tap opens) }
+local function drawQuote(env, c, s, o)
     local w, h, tone = env.w, env.h, env.tone
-    local s = min(w / 1000, h / 340)
-    if w < 760 then s = min(w / 560, h / 400) end
     local px, fpx = scaler(s, env.ts)
+    local pad = px(38)
+    local left = pad
+    local paper = paperOn() and paperLook(tone) or nil
+    local sheet = px(14)
+    if paper then
+        -- the sheet, its holes and its margin line
+        c:rrect(sheet, sheet, w - 2 * sheet, h - 2 * sheet, px(6), paper.edge)
+        c:rrect(sheet + 1, sheet + 1, w - 2 * sheet - 2, h - 2 * sheet - 2, px(5), paper.paper)
+        local hole_r = max(3, px(8))
+        local hx = sheet + px(22)
+        for k = 1, 3 do
+            local hy = sheet + (h - 2 * sheet) * k / 4
+            c:disc(hx, hy, hole_r + 1, paper.edge, paper.paper)
+            c:disc(hx, hy, hole_r, tone.bg, paper.edge)
+        end
+        c:rect(sheet + px(48), sheet + 1, max(2, px(3)), h - 2 * sheet - 2, paper.margin)
+        pad = px(46)
+        left = sheet + px(62)
+    end
+    local W = w - left - pad
+    local t_head = c:label(o.head, fpx(22), left, pad, { bold = true, caps = true, color = tone.accent, max_w = W * 0.6 })
+    local pill_h = fpx(50)
+    local t_an = c:text(T("Another"), fpx(22), { bold = true, color = tone.fg })
+    local pw = t_an.w + fpx(48)
+    if t_head.w + pw + px(20) <= W then
+        local pxx = w - pad - pw
+        local py = pad + t_head.h / 2 - pill_h / 2
+        c:frame(pxx, py, pw, pill_h, pill_h / 2, max(2, px(3)), tone.border or tone.fg, paper and paper.paper or tone.bg,
+            paper and paper.paper or nil)
+        c:put(t_an, pxx + pw / 2, py + pill_h / 2, "c", "mid")
+        c:region("another", pxx, py, pw, pill_h, px(12))
+    end
+    local function tape()
+        if not paper then return end
+        -- washi tape over the top corners
+        local tl = max(px(40), floor(min(w, h) * 0.2))
+        c:sprite(sheet + px(6), sheet + px(4), tl, math.rad(-38),
+            { { "r", 0, 0, 0.5, 0.16, 0, 0.02, paper.tape, paper.tape_line } }, { lw = 1 })
+        c:sprite(w - sheet - px(6), sheet + px(4), tl, math.rad(38),
+            { { "r", 0, 0, 0.5, 0.16, 0, 0.02, paper.tape2, paper.tape2_line } }, { lw = 1 })
+    end
+    if not o.text then
+        if o.waiting then
+            c:label(o.waiting, fpx(24), w / 2, h / 2, { anchor = "c", valign = "mid", color = tone.muted, max_w = W })
+        end
+        tape()
+        return c
+    end
+    local t_src = c:text("\xE2\x80\x94 " .. (o.source or ""), fpx(24), { bold = true, color = tone.label, max_w = W })
+    local t_sub = o.sub and c:text(o.sub, fpx(20), { bold = true, color = tone.accent2, max_w = W }) or nil
+    local foot = t_src.h + (t_sub and (t_sub.h + px(4)) or 0)
+    local top = pad + t_head.h + px(10)
+    local mark = (o.mark ~= false) and c:text("\xE2\x80\x9C", fpx(96), { bold = true, color = tone.accent }) or nil
+    local qx = left + (mark and (floor(mark.w * 0.9) + px(10)) or 0)
+    local tw = w - pad - qx
+    local t_extra = o.extra and c:textbox(o.extra, fpx(22), tw, 3, { color = tone.muted }) or nil
+    local extra_h = t_extra and (t_extra.h + px(10)) or 0
+    local room = h - pad - foot - px(14) - top - extra_h
+    if t_extra and room < fpx(26) * 2 then
+        room, extra_h, t_extra = room + extra_h, 0, nil
+    end
+    local t_q = fitQuote(c, o.text, tw, room, fpx(36), fpx(22), tone)
+    local block = t_q.h + extra_h
+    local yy = top + max(0, floor((room + extra_h - block) / 2))
+    local sy = min(h - pad - foot, yy + block + px(14))
+    if paper then
+        -- the ruled lines, one under each line of the quote and on down the page
+        local lpx = floor(1.18 * t_q.px + 0.5)
+        local first = yy + lpx - floor(t_q.px * 0.12)
+        while first - lpx > top do first = first - lpx end
+        local lw = max(2, px(2))
+        local ry = first
+        local snapped = false
+        while ry < h - sheet - px(10) do
+            c:rect(sheet + px(48) + px(5), ry, w - 2 * sheet - px(48) - px(7), lw, paper.rule)
+            -- the source written on the first free line under the quote
+            if not snapped and ry - t_src.base - px(2) >= yy + block + px(6) then
+                snapped = true
+                sy = min(sy, ry - t_src.base - px(2))
+                if ry - t_src.base - px(2) <= h - pad - foot then sy = ry - t_src.base - px(2) end
+            end
+            ry = ry + lpx
+        end
+    end
+    if mark then c:put(mark, left, yy - floor(mark.h * 0.12)) end
+    c:put(t_q, qx, yy)
+    if t_extra then c:put(t_extra, qx, yy + t_q.h + px(10)) end
+    c:put(t_src, qx, sy)
+    if t_sub then c:put(t_sub, qx, sy + t_src.h + px(4)) end
+    tape()
+    c:region("open", 0, 0, w, h)
+    return c
+end
+
+local function quoteScale(w, h)
+    if w < 760 then return min(w / 560, h / 400) end
+    return min(w / 1000, h / 340)
+end
+
+function P.quote.build(env)
+    local w, h = env.w, env.h
+    local s = quoteScale(w, h)
     local c = card(env, s)
     local q
     if env.sample then q = SAMPLE_QUOTE
@@ -4243,39 +5152,12 @@ function P.quote.build(env)
     else
         q = D.quote(env.refresh)
     end
-    local pad = px(38)
-    local W = w - 2 * pad
     if q == false or (q and not q.text) then
         return emptyState(env, c, s, T("Quote of the day"), T("No highlights yet"),
             T("Highlight a line while you read and it can show up here."))
     end
-    local t_head = c:label(T("Quote of the day"), fpx(22), pad, pad, { bold = true, caps = true, color = tone.accent, max_w = W * 0.6 })
-    local pill_h = fpx(44)
-    local t_an = c:text(T("Another"), fpx(21), { bold = true, color = tone.fg })
-    local pw = t_an.w + fpx(34)
-    if t_head.w + pw + px(20) <= W then
-        local pxx = w - pad - pw
-        local py = pad + t_head.h / 2 - pill_h / 2
-        c:frame(pxx, py, pw, pill_h, pill_h / 2, max(2, px(3)), tone.border or tone.fg, tone.bg)
-        c:put(t_an, pxx + pw / 2, py + pill_h / 2, "c", "mid")
-        c:region("another", pxx, py, pw, pill_h, px(12))
-    end
-    if not q then return c end
-    if not env.sample then A.state.quote_fp = q.filepath end
-    local src = quoteSource(q)
-    local t_src = c:text("\xE2\x80\x94 " .. src, fpx(24), { bold = true, color = tone.label, max_w = W })
-    local top = pad + t_head.h + px(10)
-    local mark = c:text("\xE2\x80\x9C", fpx(96), { bold = true, color = tone.accent })
-    local mark_w = floor(mark.w * 0.9)
-    local qx = pad + mark_w + px(10)
-    local room = h - pad - t_src.h - px(14) - top
-    local t_q = fitQuote(c, q.text, w - pad - qx, room, fpx(36), fpx(22), tone)
-    local yy = top + max(0, floor((room - t_q.h) / 2))
-    c:put(mark, pad, yy - floor(mark.h * 0.12))
-    c:put(t_q, qx, yy)
-    c:put(t_src, qx, min(h - pad - t_src.h, yy + t_q.h + px(14)))
-    c:region("open", 0, 0, w, h)
-    return c
+    if q and not env.sample then A.state.quote_fp = q.filepath end
+    return drawQuote(env, c, s, { head = T("Quote of the day"), text = q and q.text, source = q and quoteSource(q) })
 end
 
 function P.quote.tap(env, region)
@@ -4285,6 +5167,133 @@ function P.quote.tap(env, region)
 end
 function P.quote.keep(region) return region == "another" end
 function P.quote.controls(region) return region == "another" end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Quote of the day 2, 3 and 4: more random highlights, each card with a pick
+-- of its own. They never show the same highlight as each other or as Quote of
+-- the day, and Another on one leaves the rest alone.
+-- ════════════════════════════════════════════════════════════════════════════
+
+local MORE_QUOTES = { "quote2", "quote3", "quote4" }
+
+for i, name in ipairs(MORE_QUOTES) do
+    P[name] = {
+        does = T("opens the book"),
+        title = A.tr("Quote of the day %1", i + 1), tone = "tint2", ratio = 0.34, ratio_narrow = 0.6,
+        summary = T("Another random highlight of yours each day, never the same one as your other quote cards."),
+    }
+end
+
+local function bookSource(fp)
+    local info = D.info(fp)
+    local title, author = info and info.title or "", info and info.author
+    if author and author ~= "" then return title .. ", " .. author end
+    return title
+end
+
+-- Every highlight in the reading history in one list: { {fp, e}, ... }.
+local function allHighlights(hl)
+    if not hl._flat then
+        local flat = {}
+        for _, b in ipairs(hl.books) do
+            for _, e in ipairs(b.list) do flat[#flat + 1] = { fp = b.fp, e = e } end
+        end
+        hl._flat = flat
+    end
+    return hl._flat
+end
+
+local function sameText(a, b)
+    local function norm(t) return (t:gsub("%s+", " "):match("^%s*(.-)%s*$")):sub(1, 200) end
+    return type(a) == "string" and type(b) == "string" and norm(a) == norm(b)
+end
+
+-- Where a card is in today's shuffled list: its own place once Another was
+-- tapped today, else its own starting place (each card starts on another one).
+local function quotePos(name, day)
+    local st = A.get(name .. "_state", nil)
+    if type(st) == "table" and st.day == day and tonumber(st.pos) then return tonumber(st.pos) end
+    for i, n in ipairs(MORE_QUOTES) do if n == name then return i - 1 end end
+    return 0
+end
+
+-- From place `from` on, the first one not `taken` and not the highlight
+-- Quote of the day is showing.
+local function freePlace(flat, order, taken, from)
+    local count = #flat
+    local q = D.quotePeek()
+    local qtext = q and q.text
+    local p = from % count
+    for _ = 1, count do
+        if not taken[p] and not sameText(flat[order[p + 1]].e.text, qtext) then return p end
+        p = (p + 1) % count
+    end
+    return from % count
+end
+
+-- Where every quote card is today, settled in order: each skips the places
+-- of the cards before it (so two never show the same highlight).
+local function quotePlaces(flat, order, day)
+    local taken, places = {}, {}
+    for _, n in ipairs(MORE_QUOTES) do
+        local p = freePlace(flat, order, taken, quotePos(n, day))
+        taken[p], places[n] = true, p
+    end
+    return places
+end
+
+-- Another: the next highlight in today's list that no other card is showing.
+-- The other cards are kept where they are, so only this one changes.
+function A.quoteAgain(name)
+    local hl = D.highlights()
+    local flat = hl and allHighlights(hl)
+    if not flat or #flat == 0 then return end
+    local day = os.date("%Y-%m-%d")
+    local order = D.dayOrder(#flat, day)
+    local places = quotePlaces(flat, order, day)
+    local taken = {}
+    for _, n in ipairs(MORE_QUOTES) do
+        if n ~= name then
+            local p = places[n]
+            taken[p] = true
+            if quotePos(n, day) ~= p then A.set(n .. "_state", { day = day, pos = p }) end
+        end
+    end
+    A.set(name .. "_state", { day = day, pos = freePlace(flat, order, taken, places[name] + 1) })
+end
+
+for _, name in ipairs(MORE_QUOTES) do
+    P[name].build = function(env)
+        local s = quoteScale(env.w, env.h)
+        local c = card(env, s)
+        local head = T("Quote of the day")
+        if env.sample then
+            return drawQuote(env, c, s, { head = head, text = SAMPLE_QUOTE.text,
+                source = SAMPLE_QUOTE.title .. ", " .. SAMPLE_QUOTE.author })
+        end
+        local hl = D.highlights(env.refresh)
+        if not hl then
+            return drawQuote(env, c, s, { head = head, waiting = T("Finding your highlights\xE2\x80\xA6") })
+        end
+        local flat = allHighlights(hl)
+        if #flat == 0 then
+            return emptyState(env, c, s, head, T("No highlights yet"),
+                T("Highlight a line while you read and it can show up here."))
+        end
+        local day = os.date("%Y-%m-%d")
+        local order = D.dayOrder(#flat, day)
+        local pick = flat[order[quotePlaces(flat, order, day)[name] + 1]]
+        A.state[name .. "_fp"], A.state[name .. "_text"] = pick.fp, pick.e.text
+        return drawQuote(env, c, s, { head = head, text = pick.e.text, source = bookSource(pick.fp) })
+    end
+    P[name].tap = function(env, region)
+        if region == "another" then A.quoteAgain(name) return end
+        local fp = A.state[name .. "_fp"]
+        if fp then D.openBook(env.ctx, fp) end
+    end
+    P[name].keep = function(region) return region == "another" end
+    P[name].controls = function(region) return region == "another" end
+end
 
 P.timeline = {
     does = T("opens the reading calendar"),
@@ -4353,6 +5362,120 @@ local function timelineTrack(c, day, x, y, w, bh, px, fpx, tone, labels)
     return colours
 end
 
+-- ─── the timeline as a sky ───────────────────────────────────────────────────
+-- The Sky look: the day as a strip of sky from a sun in the morning to a moon
+-- and stars at night; each daytime sitting a cloud, each evening one a star,
+-- bigger the longer it was, and a little heart over "now".
+
+local function skyOn() return A.get("timeline_look", "plain") == "sky" end
+local SKY = {   -- hour, colour
+    { 0, { 54, 62, 108 } }, { 5, { 120, 118, 168 } }, { 6, { 250, 214, 190 } }, { 8, { 206, 230, 248 } },
+    { 15, { 192, 224, 248 } }, { 17.5, { 250, 210, 176 } }, { 19, { 236, 160, 150 } }, { 20.5, { 128, 120, 176 } },
+    { 22, { 70, 78, 128 } }, { 24, { 44, 50, 94 } },
+}
+local function skyAt(hr)
+    for i = 2, #SKY do
+        local a, b = SKY[i - 1], SKY[i]
+        if hr <= b[1] then return A.mix(a[2], b[2], (hr - a[1]) / (b[1] - a[1])) end
+    end
+    return SKY[#SKY][2]
+end
+local CLOUD, CLOUD_EDGE = { 255, 255, 255 }, { 150, 168, 188 }
+local STAR, STAR_EDGE = { 255, 230, 130 }, { 214, 170, 50 }
+local function cloudParts()
+    return {
+        { "e", 0, 0.12, 0.5, 0.2, 0, CLOUD },
+        { "e", -0.26, 0.04, 0.24, 0.2, 0, CLOUD },
+        { "e", 0.04, -0.1, 0.28, 0.27, 0, CLOUD },
+        { "e", 0.3, 0.04, 0.2, 0.17, 0, CLOUD },
+    }
+end
+local function starParts() return { { "*", 0, 0, 0.5, STAR } } end
+-- a sitting's little picture: a cloud by day, a star by night
+local function sittingIcon(c, cx, cy, size, night, px)
+    if night then
+        c:sprite(cx, cy, size, 0, starParts(), { halo = max(1, px(2)), halo_col = STAR_EDGE })
+    else
+        c:sprite(cx, cy, size * 1.5, 0, cloudParts(), { halo = max(1, px(2)), halo_col = CLOUD_EDGE })
+    end
+end
+
+local function skyTrack(c, day, x0, y, w0, sh, px, fpx, tone, labels)
+    -- the sun just before the strip, the moon just after it
+    local icon = floor(sh * 0.78)
+    local x, w = x0 + icon + px(10), w0 - 2 * (icon + px(10))
+    local t = os.date("*t")
+    local d0 = os.time{ year = t.year, month = t.month, day = t.day, hour = 0, min = 0, sec = 0 }
+    local first_hr = 6
+    for _, sit in ipairs(day.sittings) do first_hr = min(first_hr, os.date("*t", sit.start).hour) end
+    local from = d0 + first_hr * 3600
+    local span = 24 * 3600 - first_hr * 3600
+    local function xAt(when) return x + w * A.clamp((when - from) / span, 0, 1) end
+    local function hourAtX(xx) return first_hr + (24 - first_hr) * (xx - x) / w end
+    -- the sky, a column at a time, with round ends
+    local r = floor(sh * 0.32)
+    local step = max(1, px(2))
+    for xx = floor(x), floor(x + w) - 1, step do
+        local d = min(xx - x, x + w - xx - 1)
+        local inset = 0
+        if d < r then inset = floor(r - math.sqrt(max(0, r * r - (r - d) * (r - d))) + 0.5) end
+        c:rect(xx, y + inset, step, sh - 2 * inset, skyAt(hourAtX(xx + step / 2)))
+    end
+    -- a few stars in the night sky
+    local night_x = xAt(d0 + 21 * 3600)
+    if x + w - night_x > sh then
+        for k = 1, 6 do
+            local sx = night_x + (x + w - night_x - sh * 0.9) * ((k * 0.37) % 1)
+            local sy = y + sh * (0.22 + ((k * 0.53) % 1) * 0.56)
+            c:sprite(sx, sy, sh * (0.12 + (k % 3) * 0.04), 0, { { "*", 0, 0, 0.5, { 236, 236, 250 } } })
+        end
+    end
+    -- the sun in the morning, the moon at night
+    local sun = { 255, 204, 80 }
+    local sun_parts = { { "e", 0, 0, 0.26, 0.26, 0, sun, { 226, 160, 40 } } }
+    for k = 0, 7 do
+        local a = k * math.pi / 4
+        sun_parts[#sun_parts + 1] = { "s", 0.36 * math.cos(a), 0.36 * math.sin(a), 0.48 * math.cos(a), 0.48 * math.sin(a), 0.05, sun }
+    end
+    c:sprite(x0 + icon / 2, y + sh / 2, icon, 0, sun_parts, { lw = max(1, px(2)) })
+    local mx = x0 + w0 - icon / 2
+    local moon = tone.dark and { 250, 240, 200 } or { 236, 214, 120 }
+    c:sprite(mx, y + sh / 2, icon * 0.9, 0, {
+        { "e", 0, 0, 0.4, 0.4, 0, moon, { 196, 170, 80 } },
+        { "e", 0.2, -0.12, 0.33, 0.33, 0, tone.bg },
+    }, { lw = max(1, px(2)) })
+    -- the sittings: clouds by day, stars by night, bigger the longer
+    for _, sit in ipairs(day.sittings) do
+        local hr = os.date("*t", sit.start).hour
+        local night = hr >= 19 or hr < 5
+        local mins = (sit.secs or 0) / 60
+        local size = sh * A.clamp(0.42 + mins / 120, 0.42, 0.95)
+        local cx = (xAt(sit.start) + xAt(max(sit.stop, sit.start + 60))) / 2
+        cx = A.clamp(cx, x + size * 0.6, x + w - size * 0.6)
+        sittingIcon(c, cx, y + sh / 2, size, night, px)
+    end
+    -- now: a thin line through the sky and a little heart over it
+    local now = os.time()
+    if now > from then
+        local nx = xAt(now)
+        c:rect(floor(nx - max(1, px(1))), y, max(2, px(3)), sh, { 255, 255, 255 })
+        local hs = max(px(14), sh * 0.32)
+        local fill, line = cozyHeart(tone)
+        c:heart(nx, y - hs * 0.55, hs, hs, { outer = 1, line = line, fill = fill, track = fill, t = max(1, px(2)) })
+    end
+    if labels then
+        local marks = {}
+        for hr = first_hr, 24, 6 do marks[#marks + 1] = hr end
+        if marks[#marks] ~= 24 then marks[#marks + 1] = 24 end
+        for i, hr in ipairs(marks) do
+            local mxx = xAt(d0 + hr * 3600)
+            local anchor = (i == 1 and "l") or (i == #marks and "r") or "c"
+            c:label(hourMark(hr), fpx(19), mxx, y + sh + px(6), { bold = true, color = tone.label, anchor = anchor })
+        end
+    end
+    return {}
+end
+
 function P.timeline.build(env)
     local w, h, tone = env.w, env.h, env.tone
     local s = min(w / 1000, h / 340)
@@ -4373,9 +5496,11 @@ function P.timeline.build(env)
     local right = n > 0 and (A.fmtMinutes(secs / 60) .. "  \xC2\xB7  " .. A.plural(n, T("sitting"), T("sittings"))) or T("Nothing read yet")
     local t_r = c:text(right, fpx(24), { bold = true, color = n > 0 and tone.fg or tone.muted })
     if t_head.w + t_r.w + px(20) <= W then c:put(t_r, w - pad, pad + t_head.base, "r", "base") end
-    local y = pad + t_head.h + px(22)
-    local bh = max(8, px(34))
-    local colours = timelineTrack(c, day, pad, y, W, bh, px, fpx, tone, true)
+    local sky = skyOn()
+    local y = pad + t_head.h + px(sky and 30 or 22)
+    local bh = sky and max(16, px(56)) or max(8, px(34))
+    local colours = sky and skyTrack(c, day, pad, y, W, bh, px, fpx, tone, true)
+        or timelineTrack(c, day, pad, y, W, bh, px, fpx, tone, true)
     y = y + bh + px(6) + c:text("12a", fpx(19), { bold = true }).h + px(12)
     -- the sittings, newest first, as many as fit
     local t_probe = c:text("Ag", fpx(24), { bold = true })
@@ -4386,7 +5511,7 @@ function P.timeline.build(env)
             c:label(T("Open a book and each sitting shows up here."), fpx(22), pad, y, { color = tone.muted, max_w = W })
         end
     else
-        local cols = (W >= px(1100) and fit < n) and 2 or 1
+        local cols = (W >= px(sky and 820 or 1100) and fit < n) and 2 or 1
         local cw = (W - (cols - 1) * px(30)) / cols
         local shown = min(n, fit * cols)
         for i = 1, shown do
@@ -4397,7 +5522,14 @@ function P.timeline.build(env)
             local yy = y + row_i * row_h
             local dot = max(4, px(16))
             local k = sit.book or sit.title or 0
-            c:rrect(x, yy + t_probe.h / 2 - dot / 2, dot, dot, dot / 2, colours[k] or tone.accent)
+            if sky then
+                -- the sitting's cloud or star beside its time
+                local hr = os.date("*t", sit.start).hour
+                dot = max(px(14), floor(t_probe.h * 0.8))
+                sittingIcon(c, x + dot / 2, yy + t_probe.h / 2, dot * 0.9, hr >= 19 or hr < 5, px)
+            else
+                c:rrect(x, yy + t_probe.h / 2 - dot / 2, dot, dot, dot / 2, colours[k] or tone.accent)
+            end
             local t_when = c:text(clockShort(sit.start), fpx(24), { bold = true, color = tone.fg })
             local t_len = c:text(A.fmtMinutes(sit.secs / 60), fpx(24), { bold = true, color = tone.label })
             local tx = x + dot + px(12)
@@ -4415,6 +5547,397 @@ end
 
 function P.timeline.tap(env) D.dispatch("stats_calendar_view") end
 
+-- ════════════════════════════════════════════════════════════════════════════
+-- Cover calendar: each day of the month with the cover of the book you read
+-- most that day, and the same for this week. Tap a day for its books.
+-- ════════════════════════════════════════════════════════════════════════════
+
+P.calendar = {
+    does = T("opens a day's books"),
+    title = T("Cover calendar"), tone = "ink", ratio = 1.05, ratio_narrow = 1.2,
+    summary = T("Every day this month with the cover of the book you read most that day. Tap a day for its books. Needs the statistics plugin."),
+}
+
+P.cover_week = {
+    does = T("opens a day's books"),
+    title = T("Week in covers"), tone = "ink", ratio = 0.42, ratio_narrow = 0.6,
+    summary = T("This week with the cover of the book you read each day. Tap a day for its books. Needs the statistics plugin."),
+}
+
+-- A month or week of made-up reading for the module picker's preview.
+local function sampleCoverDays(from_t, n)
+    local titles = { "Carrie", "The Haunting of Hill House", "Piranesi" }
+    local out = {}
+    for i = 0, n - 1 do
+        if (i * 7) % 5 ~= 1 then
+            local d = os.date("%Y-%m-%d", from_t + i * 86400 + 43200)
+            out[d] = { { title = titles[(floor(i / 4) % 3) + 1], secs = 1200 + (i * 613) % 3600, pages = 20 + i } }
+            if i % 6 == 2 then out[d][2] = { title = titles[((floor(i / 4) + 1) % 3) + 1], secs = 600, pages = 9 } end
+        end
+    end
+    return out
+end
+
+local function dayKey(y, m, d) return string.format("%04d-%02d-%02d", y, m, d) end
+
+-- One day, flat like the Cover Calendar plugin: a day with reading is its
+-- cover (a second book fanned behind it, "+N" for more), centred with room
+-- around it; a day without is just its number. Today's number sits on a
+-- pill, and today's cover gets a bar underneath.
+local function coverCell(c, x, y, w, h, day_n, books, o, px, fpx, tone)
+    local is_today, future = o.today, o.future
+    if books and books[1] and o.polaroid then
+        local L = o.polaroid
+        local ratio = o.ratio or 0.84
+        local bar = max(3, px(6))
+        local below = is_today and (bar + px(5)) or 0
+        local two = books[2] ~= nil
+        local ang = o.tilt or 0
+        -- as big as fits, with room to turn (and for a second one behind)
+        -- (a little over the cell's height is fine: pinned photos overlap)
+        local pw = min(w * ratio / (1.05 + (two and 0.13 or 0)), (h * ratio - below) * 1.07 / (POLA_RATIO + 0.04))
+        local ph = pw * POLA_RATIO
+        local cx = x + w / 2 - (two and pw * 0.07 or 0)
+        local cy = y + (h - below) / 2
+        if two then polaroid(c, cx + pw * 0.15, cy + pw * 0.03, pw, -ang * 1.2, books[2], nil, nil, px, L) end
+        local cap_px = max(minFont(), floor(pw * POLA_B * 0.66))
+        polaroid(c, cx, cy, pw, ang, books[1], o.caption, cap_px, px, L)
+        if #books > 2 and o.num_px then
+            local t_more = c:text("+" .. (#books - 2), o.num_px, { bold = true, color = tone.btn_fg })
+            local mw, mh = t_more.w + px(10), t_more.h
+            local mx, my = cx + pw * 0.5 + (two and pw * 0.15 or 0) - mw + px(2), cy + ph * 0.5 - mh + px(2)
+            c:rrect(mx, my, mw, mh, mh * 0.3, tone.label)
+            c:put(t_more, mx + mw / 2, my + mh / 2, "c", "mid")
+        end
+        local box = { x = floor(cx - pw / 2), y = floor(cy - ph / 2), w = floor(pw + (two and pw * 0.15 or 0)), h = floor(ph), captioned = true }
+        if is_today then
+            c:rrect(cx - pw * 0.4, cy + ph / 2 + px(6), pw * 0.8, bar, bar / 2, tone.accent)
+            box.h = box.h + px(6) + bar
+        end
+        return box
+    end
+    if books and books[1] then
+        local ratio = o.ratio or 0.84
+        local bar = max(3, px(6))
+        local room_w, room_h = w * ratio, h * ratio - (is_today and (bar + px(5)) or 0)
+        local two = books[2] ~= nil
+        local fan = two and max(3, floor(min(room_w, room_h * 2 / 3) * 0.13)) or 0
+        -- a 2:3 cover that fits the room, leaving space for the fanned one
+        local ch = min(room_h - fan / 2, (room_w - fan) * 1.5)
+        local cw = floor(ch * 2 / 3)
+        ch = floor(ch)
+        local bx = floor(x + (w - cw - fan) / 2)
+        local by = floor(y + (h - ch - fan / 2 - (is_today and (bar + px(5)) or 0)) / 2)
+        if two then
+            c:cover(books[2].fp, bx + fan, by + floor(fan / 2), cw, ch, { title = books[2].title, edge = tone.border or tone.track })
+        end
+        c:cover(books[1].fp, bx, by, cw, ch, { title = books[1].title, edge = tone.border or tone.track })
+        if #books > 2 and o.num_px then
+            local t_more = c:text("+" .. (#books - 2), o.num_px, { bold = true, color = tone.btn_fg })
+            local mw, mh = t_more.w + px(10), t_more.h
+            local mx, my = bx + cw + fan - mw + px(4), by + ch + floor(fan / 2) - mh + px(4)
+            c:rrect(mx, my, mw, mh, mh * 0.3, tone.label)
+            c:put(t_more, mx + mw / 2, my + mh / 2, "c", "mid")
+        end
+        local bh = ch + floor(fan / 2)
+        if is_today then
+            c:rrect(bx, by + bh + px(5), cw + fan, bar, bar / 2, tone.accent)
+            bh = bh + px(5) + bar
+        end
+        return { x = bx, y = by, w = cw + fan, h = bh }
+    end
+    local t_n = c:text(tostring(day_n), o.num_px, { bold = true,
+        color = is_today and tone.btn_fg or (future and A.mix(tone.bg, tone.label, 0.45) or tone.label) })
+    if is_today then
+        local pw, ph = t_n.w + px(18), t_n.h + px(6)
+        c:rrect(x + (w - pw) / 2, y + (h - ph) / 2, pw, ph, ph * 0.35, tone.btn)
+    end
+    c:put(t_n, x + w / 2, y + h / 2, "c", "mid")
+end
+
+local function calendarDays(env, which)
+    if env.sample then
+        if which == "week" then
+            local t = os.date("*t")
+            local back = (t.wday - D.weekStart()) % 7
+            return sampleCoverDays(os.time{ year = t.year, month = t.month, day = t.day - back, hour = 0 }, back + 1)
+        end
+        local y, m = A.viewMonth()
+        return sampleCoverDays(os.time{ year = y, month = m, day = 1, hour = 0 }, tonumber(os.date("%d")) or 20)
+    end
+    return D.coverDays(env.refresh, which)
+end
+
+local function periodTotals(days)
+    local secs, pages, seen, n = 0, 0, {}, 0
+    for _, list in pairs(days or {}) do
+        for _, e in ipairs(list) do
+            secs = secs + (e.secs or 0)
+            pages = pages + (e.pages or 0)
+            local k = e.fp or e.title
+            if k and not seen[k] then seen[k] = true; n = n + 1 end
+        end
+    end
+    return n, secs, pages
+end
+
+-- The month in three figures across the top: pages, books, time read.
+local function calendarStats(c, days, x, y, W, px, fpx, tone)
+    local n, secs, pages = periodTotals(days)
+    local figs = {
+        { A.thousands(pages), T("Pages read"), tone.series[1] },
+        { tostring(n), T("Books read"), tone.series[2] },
+        { hoursText(secs), T("Time read"), tone.fg },
+    }
+    -- one line: each figure with its label beside it, the three spread out
+    local f_big, f_small = fpx(32), fpx(19)
+    local items, total = {}, 0
+    for i, f in ipairs(figs) do
+        local t_v = c:text(f[1], f_big, { bold = true, color = f[3] })
+        local t_l = c:text(f[2], f_small, { bold = true, color = tone.label })
+        items[i] = { t_v, t_l }
+        total = total + t_v.w + px(10) + t_l.w
+    end
+    if total > W * 0.94 then
+        -- too narrow for the labels: the figures alone
+        for _, it in ipairs(items) do it[2] = nil end
+    end
+    local h_line = items[1][1].h
+    local cw = W / 3
+    for i, it in ipairs(items) do
+        local t_v, t_l = it[1], it[2]
+        local wi = t_v.w + (t_l and (px(10) + t_l.w) or 0)
+        local ix = (i == 1 and x) or (i == 3 and (x + W - wi)) or (x + cw + (cw - wi) / 2)
+        c:put(t_v, ix, y)
+        if t_l then c:put(t_l, ix + t_v.w + px(10), y + t_v.base, "l", "base") end
+    end
+    return h_line
+end
+
+function P.calendar.build(env)
+    local w, h, tone = env.w, env.h, env.tone
+    local s = min(w / 1100, h / 1150)
+    local px, fpx = scaler(s, env.ts)
+    local c = card(env, s)
+    local days = calendarDays(env, "month")
+    if days == false then
+        return emptyState(env, c, s, T("Cover calendar"), T("No reading statistics"), T("Turn on KOReader's Reading statistics plugin."))
+    end
+    local y_v, m_v, current = A.viewMonth()
+    local pad = px(20)
+    local W = w - 2 * pad
+    local top = pad
+    -- the month and its arrows: the card's own, unless it sits on a Dashboard
+    -- page whose title already shows them
+    if not (env.nested and env.page_heading) then
+        -- wide buttons, easy to hit: Today (when you've stepped away), back, forward
+        local pill = fpx(60)
+        local aw = floor(pill * 1.7)
+        local bw_ = max(2, px(3))
+        local function button(label_t, x_right, width, id)
+            c:frame(x_right - width, top, width, pill, pill / 2, bw_, tone.border or tone.fg, tone.bg)
+            c:put(label_t, x_right - width / 2, top + pill / 2, "c", "mid")
+            c:region(id, x_right - width, top, width, pill, px(8))
+            return x_right - width - px(14)
+        end
+        local ax = w - pad
+        if not current then
+            ax = button(c:text("\xE2\x80\xBA", fpx(46), { bold = true, color = tone.fg }), ax, aw, "next")
+        end
+        if (tonumber(A.state.month_offset) or 0) > -D.BACK_MONTHS then
+            ax = button(c:text("\xE2\x80\xB9", fpx(46), { bold = true, color = tone.fg }), ax, aw, "prev")
+        end
+        if not current then
+            local t_today = c:text(T("Today"), fpx(24), { bold = true, color = tone.fg })
+            ax = button(t_today, ax, max(aw, t_today.w + fpx(44)), "now")
+        end
+        local t_head = c:label(A.monthTitle(y_v, m_v), fpx(26), pad, top + pill / 2,
+            { bold = true, caps = true, color = tone.accent, valign = "mid", max_w = max(px(60), ax - pad) })
+        if not current then c:region("now", pad, top, t_head.w, pill, px(8)) end
+        top = top + pill + px(10)
+    end
+    -- the month in figures
+    if days and h >= px(700) then
+        top = top + calendarStats(c, days, pad, top, W, px, fpx, tone) + px(12)
+        c:rect(pad, top - px(5), W, max(1, px(2)), tone.track)
+        top = top + px(6)
+    end
+    -- the days of the week
+    local ws = D.weekStart()
+    local g = max(2, px(6))
+    local cw = (W - 6 * g) / 7
+    local t_l = c:text("M", fpx(19), { bold = true })
+    for i = 0, 6 do
+        local wd = ((ws - 1 + i) % 7) + 1
+        c:label(DAY_LETTERS[wd] or "", fpx(19), pad + i * (cw + g) + cw / 2, top, { bold = true, anchor = "c", color = tone.label })
+    end
+    top = top + t_l.h + px(4)
+    if not days then return c end
+    local n_days = tonumber(os.date("%d", os.time{ year = y_v, month = m_v + 1, day = 0, hour = 12 })) or 30
+    local first_wday = tonumber(os.date("%w", os.time{ year = y_v, month = m_v, day = 1, hour = 12 })) + 1
+    local offset = (first_wday - ws) % 7
+    local n_rows = ceil((offset + n_days) / 7)
+    local ch = (h - pad - top - (n_rows - 1) * g) / n_rows
+    local now = os.date("*t")
+    local num_px = max(minFont(), min(fpx(26), floor(cw * 0.24)))
+    local time = env.cfg("time", true) ~= false
+    local f_time = max(minFont(), min(fpx(18), floor(cw * 0.15)))
+    local time_h = time and (c:text("0 m", f_time, { bold = true }).h) or 0
+    local pola = polaroidOn() and polaroidLook(tone) or nil
+    if pola then time_h = 0 end
+    for d = 1, n_days do
+        local slot = offset + d - 1
+        local x = pad + (slot % 7) * (cw + g)
+        local yy = top + floor(slot / 7) * (ch + g)
+        local key = dayKey(y_v, m_v, d)
+        local list = days[key]
+        local is_today = current and d == now.day
+        local future = current and d > now.day
+        local secs = 0
+        for _, e in ipairs(list or {}) do secs = secs + (e.secs or 0) end
+        -- with the time on, the cover and its time are one block, centred
+        -- (on a polaroid the time is written on it)
+        local box = coverCell(c, floor(x), floor(yy), floor(cw), floor(ch - (list and time_h or 0)), d, list,
+            { today = is_today, future = future, num_px = num_px, ratio = (time or pola) and 1 or 0.96,
+              polaroid = pola, tilt = tiltFor(d, m_v), caption = (pola and time) and A.fmtMinutes(secs / 60) or nil,
+              cap_px = f_time }, px, fpx, tone)
+        if list and time and box and not box.captioned then
+            c:label(A.fmtMinutes(secs / 60), f_time, x + cw / 2, box.y + box.h + px(1),
+                { bold = true, anchor = "c", color = tone.label, max_w = cw })
+        end
+        if list then c:region("day:" .. key, x, yy, cw, ch) end
+    end
+    return c
+end
+
+-- This week in seven columns: the weekday and date, its cover, the time read.
+local function weekStrip(c, env, days, x0, y0, W, H, px, fpx, tone, o)
+    local ws = D.weekStart()
+    local now = os.date("*t")
+    local back = (now.wday - ws) % 7
+    local g = max(2, px(o.compact and 6 or 10))
+    local cw = (W - 6 * g) / 7
+    local f_l = fpx(o.compact and 17 or 19)
+    local f_d = fpx(o.compact and 20 or 24)
+    local t_d = c:text("30", f_d, { bold = true })
+    -- the weekday and date on one line, so the covers get the height
+    local head_h = t_d.h
+    local t_time = c:text("0 m", f_l, { bold = true })
+    local pola = polaroidOn() and polaroidLook(tone) or nil
+    local foot_h = (o.time and not pola) and (t_time.h + px(2)) or 0
+    local cov_top = y0 + head_h + px(6)
+    local cov_h = y0 + H - cov_top - foot_h
+    -- covers narrower than the room is tall: the block is centred top to bottom
+    local need_h = floor(cw * (pola and POLA_RATIO or 1.5) + 0.5) + px(6)
+    if need_h < cov_h then
+        local shift = floor((cov_h - need_h) / 2)
+        y0, cov_top, cov_h = y0 + shift, cov_top + shift, need_h
+    end
+    for i = 0, 6 do
+        local t = os.time{ year = now.year, month = now.month, day = now.day - back + i, hour = 12 }
+        local dt = os.date("*t", t)
+        local key = os.date("%Y-%m-%d", t)
+        local cx = x0 + i * (cw + g) + cw / 2
+        local is_today = i == back
+        local future = i > back
+        local t_n = c:text(tostring(dt.day), f_d, { bold = true,
+            color = is_today and tone.btn_fg or (future and A.mix(tone.bg, tone.label, 0.45) or tone.fg) })
+        local t_wd = c:text(DAY_LETTERS[dt.wday] or "", f_l, { bold = true, color = tone.label })
+        local gap_l = px(6)
+        local nw = is_today and (t_n.w + px(16)) or t_n.w
+        local total = t_wd.w + gap_l + nw
+        local ny = y0
+        local nx = cx - total / 2 + t_wd.w + gap_l + nw / 2
+        c:put(t_wd, cx - total / 2, y0 + t_d.h / 2, "l", "mid")
+        if is_today then
+            local pw, ph = t_n.w + px(16), t_n.h + px(2)
+            c:rrect(nx - pw / 2, ny - px(1), pw, ph, ph * 0.35, tone.btn)
+        end
+        c:put(t_n, nx, ny, "c")
+        local list = days and days[key]
+        if list then
+            local secs = 0
+            for _, e in ipairs(list) do secs = secs + (e.secs or 0) end
+            local box = coverCell(c, floor(cx - cw / 2), floor(cov_top), floor(cw), floor(cov_h), dt.day, list,
+                { today = false, future = false, num_px = f_l, ratio = 1, polaroid = pola, tilt = tiltFor(dt.day, dt.month),
+                  caption = (pola and o.time) and A.fmtMinutes(secs / 60) or nil, cap_px = f_l }, px, fpx, tone)
+            if o.time and box and not box.captioned then
+                c:label(A.fmtMinutes(secs / 60), f_l, cx, box.y + box.h + px(2),
+                    { bold = true, anchor = "c", color = tone.label, max_w = cw + g })
+            end
+            c:region(o.prefix .. "day:" .. key, cx - cw / 2, y0, cw, H)
+        end
+    end
+end
+
+function P.cover_week.build(env)
+    local w, h, tone = env.w, env.h, env.tone
+    local s = min(w / 1100, h / 460)
+    local px, fpx = scaler(s, env.ts)
+    local c = card(env, s)
+    local days = calendarDays(env, "week")
+    if days == false then
+        return emptyState(env, c, s, T("Week in covers"), T("No reading statistics"), T("Turn on KOReader's Reading statistics plugin."))
+    end
+    local pad = px(22)
+    local t_head = c:label(T("This week"), fpx(22), pad, pad, { bold = true, caps = true, color = tone.accent, max_w = (w - 2 * pad) * 0.6 })
+    if days then
+        local n, secs = periodTotals(days)
+        local t_tot = c:text(A.plural(n, "book", "books") .. "  \xC2\xB7  " .. hoursText(secs), fpx(22), { bold = true, color = tone.label })
+        if t_head.w + t_tot.w + px(20) <= w - 2 * pad then c:put(t_tot, w - pad, pad + t_head.base, "r", "base") end
+    end
+    local top = pad + t_head.h + px(8)
+    weekStrip(c, env, days, pad, top, w - 2 * pad, h - pad - top, px, fpx, tone,
+        { time = env.cfg("time", true) ~= false, prefix = "" })
+    return c
+end
+
+-- A day's books in a list; a book opens it.
+local function showDay(env, key)
+    local which = env.name == "cover_week" and "week" or "month"
+    local days = (which == "week" and D.coverDays(nil, "week")) or D.coverDays(nil, "month") or {}
+    local list = days[key] or (D.coverDays(nil, which == "week" and "month" or "week") or {})[key]
+    local y, m, d = key:match("^(%d+)-(%d+)-(%d+)$")
+    local when = os.time{ year = tonumber(y), month = tonumber(m), day = tonumber(d), hour = 12 }
+    A.S.open(env.ctx, A.date("%A %d %B", when), function(api)
+        local rows = {}
+        for _, e in ipairs(list or {}) do
+            local line = e.title .. "  \xC2\xB7  " .. A.fmtMinutes((e.secs or 0) / 60) .. "  \xC2\xB7  " .. A.plural(e.pages or 0, "page", "pages")
+            rows[#rows + 1] = { { text = line, enabled = e.fp ~= nil, callback = function()
+                api.close()
+                if e.fp then D.openBook(env.ctx, e.fp) end
+            end } }
+        end
+        if #rows == 0 then rows[1] = A.S.header(T("Nothing read that day")) end
+        return rows
+    end)
+end
+A.showCoverDay = showDay
+
+local function stepCalendar(region)
+    local off = tonumber(A.state.month_offset) or 0
+    if region == "prev" then A.state.month_offset = max(-D.BACK_MONTHS, off - 1)
+    elseif region == "next" then A.state.month_offset = min(0, off + 1)
+    elseif region == "now" then A.state.month_offset = 0 end
+end
+
+function P.calendar.tap(env, region)
+    if type(region) ~= "string" then return end
+    local key = region:match("^day:(.+)$")
+    if key then return showDay(env, key) end
+    stepCalendar(region)
+end
+function P.calendar.keep(region) return region == "prev" or region == "next" or region == "now" end
+function P.calendar.controls(region)
+    return type(region) == "string" and (region:match("^day:") ~= nil or P.calendar.keep(region))
+end
+
+function P.cover_week.tap(env, region)
+    local key = type(region) == "string" and region:match("^day:(.+)$")
+    if key then return showDay(env, key) end
+end
+function P.cover_week.controls(region) return type(region) == "string" and region:match("^day:") ~= nil end
+
 P.mini = {
     does = T("depends on the part tapped"),
     title = T("Mini dashboard"), tone = "ink", ratio = 0.3, ratio_narrow = 0.5,
@@ -4422,7 +5945,7 @@ P.mini = {
 }
 
 A.MINI_TILES = { "today", "control", "reading", "rings", "compare", "week", "challenge", "forecast", "goal",
-    "timeline", "pick", "quote", "library" }
+    "timeline", "pick", "quote", "library", "coverweek" }
 A.MINI_DEFAULT = { "today", "control" }
 A.MINI_MAX = 3
 A.MINI_LABEL = {
@@ -4430,12 +5953,13 @@ A.MINI_LABEL = {
     control = T("Control centre"), compare = T("This week vs last"), week = T("Week rings"),
     challenge = T("Monthly challenge"), forecast = T("Finish forecast"), goal = T("Year goal"),
     timeline = T("Today's timeline"), pick = T("Random pick"), quote = T("Quote of the day"), library = T("Library stats"),
+    coverweek = T("Week in covers"),
 }
 -- how much of the row each wants, and the least it can be drawn in (dp)
 local MINI_WEIGHT = { today = 2.0, reading = 1.4, rings = 1.25, control = 1.45, compare = 1.5, week = 1.5,
-    challenge = 1.15, forecast = 1.2, goal = 0.9, timeline = 1.6, pick = 1.4, quote = 1.8, library = 1.3 }
+    challenge = 1.15, forecast = 1.2, goal = 0.9, timeline = 1.6, pick = 1.4, quote = 1.8, library = 1.3, coverweek = 2.4 }
 local MINI_MIN = { today = 250, reading = 170, rings = 115, control = 120, compare = 165, week = 180,
-    challenge = 140, forecast = 140, goal = 105, timeline = 150, pick = 150, quote = 160, library = 150 }
+    challenge = 140, forecast = 140, goal = 105, timeline = 150, pick = 150, quote = 160, library = 150, coverweek = 230 }
 
 --- The kinds of small card in the row, in order (three at most).
 function A.miniTiles(env)
@@ -4553,6 +6077,10 @@ function MINI.today(c, env, x, y, w, h, px, fpx, tone)
     local mins = st and floor(st.today.secs / 60 + 0.5) or 0
     local streak = st and st.streak or 0
     local cols = tone.series
+    if hearts() then
+        local c1, c2 = heartColors(tone)
+        cols = { c1, c2, tone.series[3] }
+    end
     local f_fig = fpx(20)
     local figs = {
         { st and A.plural(pages, "page", "pages") or "\xE2\x80\xA6", cols[1] },
@@ -4602,9 +6130,15 @@ function MINI.today(c, env, x, y, w, h, px, fpx, tone)
             local rg = max(1, round(R * 0.055))
             local page_goal = max(1, tonumber(A.get("activity_page_goal", 30)) or 30)
             local streak_goal = max(1, tonumber(A.get("activity_streak_goal", 7)) or 7)
-            c:ring(cx, cy, R, rt, pages / page_goal, tone.track, cols[1])
-            c:ring(cx, cy, R - rt - rg, rt, mins / D.dailyMinutesGoal(), tone.track, cols[2])
-            c:ring(cx, cy, R - 2 * (rt + rg), rt, streak / streak_goal, tone.track, cols[3])
+            if hearts() then
+                local c1, c2 = heartColors(tone)
+                c:heart(cx, cy, dia, dia, { outer = pages / page_goal, inner = mins / D.dailyMinutesGoal(),
+                    line = c1, line_in = c2, track = heartTrack(tone) })
+            else
+                c:ring(cx, cy, R, rt, pages / page_goal, tone.track, cols[1])
+                c:ring(cx, cy, R - rt - rg, rt, mins / D.dailyMinutesGoal(), tone.track, cols[2])
+                c:ring(cx, cy, R - 2 * (rt + rg), rt, streak / streak_goal, tone.track, cols[3])
+            end
             local fx = tx + dia + px(14)
             if one then
                 local xx = fx
@@ -4652,6 +6186,10 @@ function MINI.rings(c, env, x, y, w, h, px, fpx, tone)
     local min_goal = D.dailyMinutesGoal()
     local streak_goal = max(1, tonumber(A.get("activity_streak_goal", 7)) or 7)
     local cols = tone.series
+    if hearts() then
+        local c1, c2 = heartColors(tone)
+        cols = { c1, c2, tone.series[3] }
+    end
     local lines = {
         st and A.plural(pages, "page", "pages") or "\xE2\x80\xA6",
         st and (A.fmtMinutes(mins) .. T(" read")) or "\xE2\x80\xA6",
@@ -4670,9 +6208,14 @@ function MINI.rings(c, env, x, y, w, h, px, fpx, tone)
     local cy = y + h / 2
     local t = max(3, round(R * 0.215))
     local g = max(1, round(R * 0.055))
-    c:ring(cx, cy, R, t, pages / page_goal, tone.track, cols[1])
-    c:ring(cx, cy, R - t - g, t, mins / min_goal, tone.track, cols[2])
-    c:ring(cx, cy, R - 2 * (t + g), t, streak / streak_goal, tone.track, cols[3])
+    if hearts() then
+        c:heart(cx, cy, 2 * R, 2 * R, { outer = pages / page_goal, inner = mins / min_goal, line = cols[1], line_in = cols[2],
+            track = heartTrack(tone) })
+    else
+        c:ring(cx, cy, R, t, pages / page_goal, tone.track, cols[1])
+        c:ring(cx, cy, R - t - g, t, mins / min_goal, tone.track, cols[2])
+        c:ring(cx, cy, R - 2 * (t + g), t, streak / streak_goal, tone.track, cols[3])
+    end
     if with_text then
         local step = min(floor((2 * R) / 3), texts[1].h + px(6))
         for i = 1, 3 do c:put(texts[i], cx + R + px(16), cy + (i - 2) * step, "l", "mid") end
@@ -4712,8 +6255,13 @@ function MINI.week(c, env, x, y, w, h, px, fpx, tone)
             color = day.today and tone.accent or tone.label })
         local fp = day.future and 0 or day.pages / page_goal
         local fm = day.future and 0 or (day.secs / 60) / min_goal
-        c:ring(cx, cy, R, rt, fp, tone.track, fp > 0 and cols[1] or tone.track)
-        c:ring(cx, cy, R - rt - g, rt, fm, tone.track, fm > 0 and cols[2] or tone.track)
+        if hearts() then
+            dayHeart(c, cx, cy, d, tone, fp, fm, { future = day.future, past = not day.future and not day.today,
+                single = d < 26 })
+        else
+            c:ring(cx, cy, R, rt, fp, tone.track, fp > 0 and cols[1] or tone.track)
+            c:ring(cx, cy, R - rt - g, rt, fm, tone.track, fm > 0 and cols[2] or tone.track)
+        end
     end
     c:region("week:", x, y, w, h)
 end
@@ -4725,12 +6273,22 @@ function MINI.challenge(c, env, x, y, w, h, px, fpx, tone)
     local col = ({ pages = tone.series[1], minutes = tone.series[2], days = tone.series[3] })[ch.metric] or tone.accent
     local R = floor(min(h / 2, w * 0.27))
     local cx, cy = x + R, y + h / 2
-    c:ring(cx, cy, R, max(3, round(R * 0.25)), min(1, ch.frac), tone.track, col)
-    c:label(floor(ch.frac * 100 + 0.5) .. "%", fpx(24 * R / px(100)), cx, cy, { bold = true, anchor = "c", valign = "mid" })
+    local flower = flowerOn()
+    local pct = floor(ch.frac * 100 + 0.5)
+    if flower then
+        local look
+        look, col = flowerLook(tone)
+        look.frac = ch.frac
+        c:flower(cx, cy, floor(R * 0.88), look)
+    else
+        c:ring(cx, cy, R, max(3, round(R * 0.25)), min(1, ch.frac), tone.track, col)
+        c:label(pct .. "%", fpx(24 * R / px(100)), cx, cy, { bold = true, anchor = "c", valign = "mid" })
+    end
     local tx = cx + R + px(16)
     local room = x + w - tx
     local t1 = c:text(challengeGoal(ch), fpx(22), { bold = true, color = tone.fg, max_w = room })
-    local t2 = c:text(challengeDone(ch), fpx(20), { bold = true, color = col, max_w = room })
+    local t2 = c:text(challengeDone(ch) .. (flower and ("  \xC2\xB7  " .. pct .. "%") or ""), fpx(20),
+        { bold = true, color = col, max_w = room })
     local t3 = c:text(ch.complete and T("Done!") or (ch.on_pace and T("On pace") or T("Behind pace")), fpx(19),
         { bold = true, color = tone.label, max_w = room })
     local total = t1.h + t2.h + t3.h + px(8)
@@ -4761,6 +6319,21 @@ function MINI.goal(c, env, x, y, w, h, px, fpx, tone)
     local target, other = D.yearGoal()
     if env.sample then target, other = 36, 0 end
     local done = (yr and yr.total or 0) + other
+    if jarOn() then
+        local jh = h
+        local jw = min(floor(jh * 0.72), floor(w * 0.4))
+        jh = floor(jw / 0.72)
+        drawJar(c, x, y + floor((h - jh) / 2), jw, jh, done, target, px, jarLook(tone))
+        local tx = x + jw + px(16)
+        local room = x + w - tx
+        local t_n = c:text(tostring(done), fpx(56), { bold = true, color = tone.fg, max_w = room })
+        local t_of = c:text(T("of ") .. target .. T(" books"), fpx(20), { bold = true, color = tone.accent, max_w = room })
+        local yy = y + floor((h - t_n.h - t_of.h) / 2)
+        c:put(t_n, tx, yy)
+        c:put(t_of, tx, yy + t_n.h - round(t_n.h * 0.1))
+        c:region("goal:", x, y, w, h)
+        return
+    end
     local top = miniHead(c, os.date("%Y") .. T(" goal"), x, y, w, fpx, tone) + px(6)
     local t_n = c:text(tostring(done), fpx(64), { bold = true, color = tone.fg })
     local t_of = c:text(T("of ") .. target .. T(" books"), fpx(21), { bold = true, color = tone.accent, max_w = w })
@@ -4783,12 +6356,14 @@ function MINI.timeline(c, env, x, y, w, h, px, fpx, tone)
     local n = #day.sittings
     local top = miniHead(c, T("Today"), x, y, w, fpx, tone, n > 0 and A.plural(n, T("sitting"), T("sittings")) or nil) + px(6)
     local t_big = c:text(n > 0 and A.fmtMinutes(secs / 60) or T("Not yet"), fpx(40), { bold = true, color = n > 0 and tone.fg or tone.muted, max_w = w })
-    local bh = max(6, px(22))
+    local sky = skyOn()
+    local bh = sky and max(10, px(40)) or max(6, px(22))
     local t_m = c:text("12a", fpx(17), { bold = true })
-    local total = t_big.h + px(10) + bh + px(4) + t_m.h
+    local total = t_big.h + px(sky and 18 or 10) + bh + px(4) + t_m.h
     local yy = top + max(0, floor((y + h - top - total) / 2))
     c:put(t_big, x, yy)
-    timelineTrack(c, day, x, yy + t_big.h + px(10), w, bh, px, function(n_) return fpx(n_ * 0.9) end, tone, true)
+    local track = sky and skyTrack or timelineTrack
+    track(c, day, x, yy + t_big.h + px(sky and 18 or 10), w, bh, px, function(n_) return fpx(n_ * 0.9) end, tone, true)
     c:region("timeline:", x, y, w, h)
 end
 
@@ -4871,6 +6446,13 @@ function MINI.library(c, env, x, y, w, h, px, fpx, tone)
     end
 end
 
+function MINI.coverweek(c, env, x, y, w, h, px, fpx, tone)
+    local days = calendarDays(env, "week")
+    if days == false then return end
+    weekStrip(c, env, days, x, y, w, h, px, fpx, tone,
+        { compact = true, time = false, prefix = "coverweek:" })
+end
+
 function P.mini.build(env)
     local w, h, tone = env.w, env.h, env.tone
     local s = A.clamp(min(h / 300, w / 1100), 0.5, 1.2)
@@ -4910,6 +6492,7 @@ end
 function P.mini.controls(region)
     local kind = miniSplit(region)
     return kind == "control" or kind == "reading" or kind == "forecast" or kind == "pick" or kind == "quote"
+        or kind == "coverweek"
 end
 
 function P.mini.keep(region)
@@ -4919,6 +6502,11 @@ end
 
 function P.mini.tap(env, region)
     local kind, rest = miniSplit(region)
+    if kind == "coverweek" then
+        local key = rest and rest:match("^day:(.+)$")
+        if key then showDay({ name = "cover_week", ctx = env.ctx }, key) end
+        return
+    end
     if kind == "control" then return controlTap(env, rest, A.get("control_count", 6)) end
     if kind == "reading" then
         if A.state.mini_reading then D.openBook(env.ctx, A.state.mini_reading) end

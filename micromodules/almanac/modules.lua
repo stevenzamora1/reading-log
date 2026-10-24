@@ -79,6 +79,7 @@ local function makeEnv(name, ctx, w, h, o)
         nested = o.nested or false,
         native = native,
         page = o.page,
+        page_heading = o.page_heading or false,
         bleed = (surface == "hero" or surface == "fullscreen"),
         sample = (ctx and ctx.preview) and true or false,
         refresh = ownRefresh(ctx),
@@ -148,9 +149,11 @@ end
 -- update over whatever was on screen before leaves that showing through.
 --
 -- Look and colours > Screen refresh picks one of:
---   clean  (default) colour hint on; one flashing update when the view opens,
---          closes, and when the dashboard turns a page; a card that redraws
---          after a tap, and the clock each minute, get a ghost-clearing update
+--   clean  (default) colour hint on; one flashing update when the view opens
+--          and closes; turning a dashboard page, a card that redraws after a
+--          tap, and the clock each minute get a ghost-clearing update (a page
+--          turn flashes every so often, following KOReader's own "Full
+--          refresh rate", as a book's pages do)
 --   soft   colour hint on, never a flash
 --   host   leave everything to Bookshelf
 --
@@ -226,8 +229,14 @@ local _attended = setmetatable({}, { __mode = "k" })
 local _seen_views = setmetatable({}, { __mode = "k" })
 function A.attend(ctx)
     local fs = overlayOf(ctx)
-    -- a newly opened full-screen view starts on this month again
-    if fs and not _seen_views[fs] then _seen_views[fs] = true; A.state.month_offset = 0 end
+    -- a newly opened full-screen view starts on this month again, with the
+    -- reading list looked at afresh and its first page drawn whole at once
+    if fs and not _seen_views[fs] then
+        _seen_views[fs] = true
+        A.state.month_offset = 0
+        D._reading = nil
+        D.hurry(0.35)
+    end
     if not fs or _attended[fs] then return end
     local mode = A.refreshMode()
     if mode == "host" or not hasEink() then return end
@@ -288,8 +297,10 @@ function A.attend(ctx)
 end
 
 -- A card that is already on screen is about to be redrawn (a tap changed it,
--- or the dashboard turned a page). flash = the whole card changes.
-local function inkRefresh(ctx, flash)
+-- or the dashboard turned a page). flash = the whole card changes; turn = a
+-- dashboard page turn (a ghost-clearing update in either mode, which KOReader
+-- promotes to a flash every "Full refresh rate" updates).
+local function inkRefresh(ctx, flash, turn)
     local id = ctx and ctx.entry and ctx.entry.id
     if id then A.state.own_redraw[id] = true end
     local fs = overlayOf(ctx, true)
@@ -297,7 +308,9 @@ local function inkRefresh(ctx, flash)
     local mode = A.refreshMode()
     if mode == "host" then return end
     local kind
-    if flash then
+    if turn then
+        kind = "partial"
+    elseif flash then
         kind = (mode == "clean") and "full" or "partial"
     elseif mode == "clean" then
         kind = "partial"
@@ -385,6 +398,9 @@ function A.render(name, ctx)
     A.attend(ctx)
     local w, h = boxFor(def, ctx)
     local c = buildPanel(name, makeEnv(name, ctx, w, h))
+    -- painted once and kept (see the paint cache in init.lua); not the
+    -- clocks, which are a new picture every minute
+    c.cache_me = not def.tick
     declareRegions(ctx, c)
     if def.tick then A.clockRefresh(ctx, c.w, c.h, 0, c.h) end
     return c
@@ -489,6 +505,8 @@ A.DASH_PAGES = {
       rows = { { "challenge", "forecast" }, { "trends" } } },
     { id = "library", label = T("Library"), heading = true, kicker = "library",
       rows = { { "library" }, { "pick", "authors" }, { "quote" } } },
+    { id = "calendar", label = T("Calendar"), heading = false, kicker = "month",
+      rows = { { "calendar" } } },
 }
 
 -- How tall a card wants to be, as a share of the page. A row takes the larger
@@ -501,15 +519,17 @@ A.DASH_WEIGHT = {
     year_time = 0.36, month_totals = 0.40, month_chart = 0.30, when_read = 0.36,
     challenge = 0.33, forecast = 0.33, trends = 0.62, control = 0.24, compare = 0.34,
     library = 0.27, authors = 0.37, pick = 0.37, quote = 0.25, timeline = 0.27,
+    calendar = 0.9, cover_week = 0.3, quote2 = 0.25, quote3 = 0.25, quote4 = 0.25,
 }
 -- The order cards are offered in when editing a page.
 A.DASH_CARDS = { "banner", "continue", "activity", "week_rings", "month_rings", "month_totals", "month_chart",
                  "when_read", "goal", "bookclub", "tbr", "genres", "year_covers", "week", "year_chart",
                  "year_time", "heatmap", "finished", "longest_year", "longest_month", "deadline",
                  "trends", "challenge", "forecast", "control", "compare",
-                 "library", "authors", "pick", "quote", "timeline" }
+                 "library", "authors", "pick", "quote", "timeline", "calendar", "cover_week",
+                 "quote2", "quote3", "quote4" }
 A.DASH_MAX_ROWS = 6
-A.DASH_MAX_PAGES = 7
+A.DASH_MAX_PAGES = 8
 
 -- Pages the reader added: { { id = "c1", label = "My page" }, ... } under
 -- dash_custom. Their rows are kept like any page's, under dash_rows_<id>.
@@ -738,7 +758,10 @@ local function buildDashboard(ctx, w, h)
         end
         local env = { w = w, h = head_h, ts = ts }
         local ok, hc = pcall(P.heading, env, kicker, pageLabel(page), nav)
-        if ok and hc then c:sub(hc, ox, oy + y, "heading|") end
+        if ok and hc then
+            hc.cache_me = true
+            c:sub(hc, ox, oy + y, "heading|")
+        end
         y = y + head_h + floor(gap * 0.6)
     end
 
@@ -753,8 +776,9 @@ local function buildDashboard(ctx, w, h)
         for ni, name in ipairs(names) do
             local x = (ni - 1) * (pw + gap)
             local width = (ni == #names) and (w - x) or pw
-            local env = makeEnv(name, ctx, width, rh, { nested = true, slot = 1, page = page_look })
+            local env = makeEnv(name, ctx, width, rh, { nested = true, slot = 1, page = page_look, page_heading = heading })
             local child = buildPanel(name, env)
+            child.cache_me = not P[name].tick
             c:sub(child, ox + x, oy + y, name .. "|")
             if P[name].tick then c.clock_y, c.clock_h = oy + y, rh end
             -- the rest of the panel: a plain tap on it
@@ -805,6 +829,16 @@ function Dashboard.render(ctx)
     return c
 end
 
+-- A new page (a tab, or another month): the data the new page needs is
+-- worked out before it is drawn, within a short time limit, so it shows up
+-- whole in one go instead of in two steps; and it is put on screen with a
+-- quick update rather than a flash (KOReader still flashes every so often,
+-- by its own "Full refresh rate", to clear ghosting).
+local function pageTurn(ctx)
+    D.hurry(0.35)
+    inkRefresh(ctx, false, true)
+end
+
 -- Without tap regions (an older Bookshelf) a tap anywhere turns the page.
 local function dashRegion(ctx)
     local region = ctx and ctx.tapped_region
@@ -853,7 +887,7 @@ end
 function Dashboard.on_tap(ctx)
     local kind, a, b = dashSplit(dashRegion(ctx))
     if kind == "nav" then
-        if stepMonth(a) then inkRefresh(ctx, true) end
+        if stepMonth(a) then pageTurn(ctx) end
         return
     end
     if kind == "tab" then
@@ -861,7 +895,7 @@ function Dashboard.on_tap(ctx)
         if not tab then return end
         if A.state.dash_page ~= tab.page then
             A.state.dash_page = tab.page
-            inkRefresh(ctx, true)
+            pageTurn(ctx)
         end
     elseif kind == "panel" then
         local def = P[a]
@@ -1105,6 +1139,7 @@ function Dashboard.show_settings(ctx)
                 api.close()
                 editPages(ctx, show)
             end } }
+            for _, r in ipairs(S.styleRows(api, ctx)) do rows[#rows + 1] = r end
             rows[#rows + 1] = S.header(T("Margin around the page"))
             rows[#rows + 1] = S.radio(api, { { "none", T("None") }, { "small", T("Small") }, { "medium", T("Medium") } },
                 MARGINS[A.get("dash_margin", "small")] and A.get("dash_margin", "small") or "small",
