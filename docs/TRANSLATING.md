@@ -1,75 +1,56 @@
 # Translating Reading Log
 
-Reading Log follows KOReader's interface language. English, Italian
-(`it.lua`), Spanish (`es.lua`) and Brazilian Portuguese (`pt_br.lua`) are
-included; selecting one of them in KOReader and restarting also translates
-the cards, dashboard tabs and module settings. European Portuguese (`pt_PT`)
-has no catalog yet and falls back to English. There is no separate language
-setting. Install the entire `micromodules/almanac/` folder, including `locales/`.
+Reading Log follows KOReader's interface language (Settings > Language), read
+once at start-up. English, Italian, Spanish, French and Brazilian Portuguese
+are included. There is no separate language setting; restart KOReader after
+changing the language.
 
-The active `gettext.current_lang` is authoritative, including KOReader's
-automatic/system language. If gettext is unavailable, the saved `language`
-setting is used, then English. The startup log records the requested language,
-its source, the selected catalog and the locale directory under
-`[reading-log i18n]`. Missing or broken catalogs also log the fallback reason.
+Reading Log uses the language KOReader is actually showing (gettext's
+`current_lang`), so it also follows KOReader's automatic, system language. If
+that isn't available it uses the saved `language` setting, then English. At
+start-up, `crash.log` gets a `[reading-log i18n]` line with the language
+asked for, where it came from, the catalog used and the folder it was read
+from. If a catalog is missing or broken, a second line says why it fell back
+to English.
 
-The translation layer is private to Reading Log. It does not change KOReader's
-or Bookshelf's gettext domain or the system locale. No additional package,
-network connection or compilation step is required on the reader.
+The translations belong to Reading Log alone. They don't change KOReader's,
+Simple UI's or Bookshelf's own translations, and nothing needs installing or
+compiling.
 
 ## Add a language
 
-1. Copy `micromodules/almanac/locales/it.lua` to `<language>.lua` in that folder
-   (for example, `fr.lua`). Keep the English message keys and translate their
-   values, together with the day/month names and initials at the top.
-2. Set `thousands_separator` and `decimal_separator` for that language.
-3. Adjust `plurals` and, if needed, add a `plural_index(n)` function returning
-   the 1-based form index. Without it, 1 is singular and all other counts use
-   the second form. Plural entries are keyed by the English singular message.
-4. Run `lua tests/i18n_spec.lua` (or `luajit tests/i18n_spec.lua`) from the
-   repository root, then check the cards on KOReader in the new language,
-   including narrow cards, module previews and the Mini dashboard.
+1. Copy `readinglog.koplugin/readinglog/locales/es.lua` to `<code>.lua` in the
+   same folder, where
+   `<code>` is KOReader's language code in lower case (`de.lua`, `pt_br.lua`).
+2. Translate the values, never the English keys. Keep `%1`, `%2` and any
+   spaces at the start or end of a message: some messages are pieces of a
+   longer line (`" of "`, `"Streak "`).
+3. Set the day and month names and initials at the top, the
+   `thousands_separator`, the `decimal_separator` and `minute_unit`.
+4. Plurals: `plurals` gives the forms for an English singular
+   (`["book"] = { "libro", "libros" }`). For a language whose plural rule isn't
+   "1 is singular", add `plural_index = function(n) ... end` returning the form
+   to use (see `fr.lua`, where 0 is singular too).
+5. Run `luajit tests/i18n_spec.lua` from the repository root: it checks that
+   every message in the code has a translation, with the same `%1`s.
+6. Restart KOReader in that language and look at every card, the Dashboard and
+   the settings (with Simple UI and with Bookshelf if you can), on a narrow
+   card too.
 
-Language codes are case-insensitive, with `-` normalized to `_`. The loader
-tries the full code, then the base language: `it_IT` and `it-IT` both use
-`it.lua`. A region can have its own file, such as `pt_br.lua`. Missing catalogs
-or individual messages fall back to English. The English catalog holds date
-and number data; English messages remain readable directly in the source.
+The loader tries the full code and then the language alone: `es_MX` uses
+`es.lua`, `pt_BR` uses `pt_br.lua`. `pt.lua` sends Portuguese from Portugal to
+the Brazilian file. A message missing from a file is shown in English.
 
-## Mark messages in code
+## In the code
 
-Each component uses `local T = A._`. Wrap **built-in interface strings** with
-`T("English message")`. Do not translate IDs, action keys, file names, saved
-values, book metadata, collection names or text entered by the reader.
-In particular, the `Hardcopy`, `bookclub <year>` and TBR collection lookups
-keep their existing names; only the displayed labels are translated.
+Each file uses `local T = A._`. Wrap text shown to the reader in `T("...")`.
+For a sentence with values in it, use `A.tr("Quick action: %1", label)`, so a
+translator can move `%1`. For counts, `A.plural(n, "book", "books")`. Use
+`A.date`, `A.thousands` and `A.decimal` for dates and numbers.
 
-For variable sentences, use complete messages and numbered placeholders:
+Don't translate settings keys, action IDs, collection names (`Hardcopy`,
+`bookclub <year>`), book data or anything the reader types in.
 
-```lua
-A.tr("%1's books", A.date("%B", when))
-```
-
-Translators can reorder `%1`, `%2`, etc. Preserve every placeholder. The
-arguments are inserted literally, including percent signs, and are never
-translated. Some existing captions are assembled from short fragments;
-leading/trailing spaces in those catalog entries must be preserved.
-
-For counts, `A.plural(n, "book", "books")` selects and translates the unit.
-For labels without the numeric value use
-`A.i18n.ngettext("singular source", "plural source", n)`. Catalog `plurals`
-can provide additional forms without changing callers.
-
-Use `A.date`, `A.thousands` and `A.decimal` for interface formatting. Keep
-machine-readable dates, SQL, settings keys, and statistics unchanged.
-KOReader requests a restart after changing language; Reading Log's static
-module definitions are rebuilt on that restart too.
-
-## Validation
-
-The standalone test loads both language modes, checks locale variants,
-English fallback, dates and calendar initials, numbers, plurals, placeholder
-preservation, source-message coverage in every catalog, and stable IDs/user
-labels.
-It does not emulate KOReader's fonts or an e-ink display. Before merging a
-new translation, inspect the actual layout on a reader or in the emulator.
+One catalog covers both home screens: a few messages are only shown with one
+of them (the goal notes, "Match Simple UI" / "Match Bookshelf"), but they all
+live in the same file.

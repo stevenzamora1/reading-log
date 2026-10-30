@@ -1,5 +1,150 @@
 # Changelog
 
+## 1.4.0
+
+- **One plugin for Simple UI and Bookshelf.** Reading Log is now a KOReader
+  plugin, `readinglog.koplugin`, that works with either home screen: Simple
+  UI as before, and Bookshelf 6.0 or newer, which loads the cards from the
+  plugin's `bookshelf_modules` folder. It installs and updates like any
+  other plugin (copy the folder into `plugins`, the App Store plugin, or
+  Tools > Reading Log > Check for updates), with no files to copy into
+  Bookshelf's settings. Both home screens share one settings file,
+  `settings/readinglog.lua`. The micromodules zip is gone.
+- **Moving from the Bookshelf micro-modules version:** your settings are
+  copied across on the first start, and your Bookshelf layouts keep their
+  cards (they have the same names). Reading Log then offers to remove the
+  old copy in `settings/bookshelf/micromodules`, which Bookshelf would
+  otherwise keep using, and asks you to restart.
+- **Bookshelf's card colours:** a card you give colours of its own with
+  Bookshelf's palette icon now shows them, even with Look and colours set to
+  "Framed, in the theme" (issue #4).
+- **Bookshelf's book calls:** opening a book and showing its book menu use
+  Bookshelf's own `ctx.open_book` and `ctx.show_book` (Bookshelf 6.0.2 and
+  newer), and taps in the full-screen view go by where Bookshelf says the
+  card is. Older Bookshelf versions work as before (issue #5).
+- With Bookshelf, times now follow KOReader's 12- or 24-hour clock like
+  every other card and Bookshelf's own clock, and French is available too.
+- **Quote of the day: Another is random now.** It used to step to the next
+  highlight of the same book, so it read through a book in order. Now it
+  picks any highlight at random, never the one just shown, and never more
+  than two in a row from one book while you have others. Quote of the day 2,
+  3 and 4 keep the same two-in-a-row rule. With Bookshelf, the day still
+  starts on the same quote as Bookshelf's own card.
+- Brazilian Portuguese: "this week against last" sentences read correctly
+  ("nem na semana passada").
+- **Device**, a new card: the battery large, then storage free, the memory
+  KOReader is using, Wi-Fi and the front light, each with a level bar (red
+  when storage or memory is nearly full, or the battery low). It reads them
+  once a minute while it's on screen and redraws only when something
+  changed. Four looks: Plain, Hearts (Cute: a heart that empties as the
+  battery runs down, and pastel pills), System monitor (Cyber: a segmented
+  ring and a readout) and Candle (Dark Academia: a candle burning down
+  beside a ledger). Tap it for KOReader's battery statistics. A reader with
+  a style already on gets its Device look too.
+- **Lifetime pages**, a new card: every page you've ever turned in
+  KOReader, how many a day on average, a bar to the next round number, and
+  this year's, this month's and this week's pages. Four looks: Plain, Hearts
+  (Cute), Data counter (Cyber) and Ledger (Dark Academia). It can go on any
+  Dashboard page.
+- **Ornaments**, five new modules with no card: they hang straight on the
+  wallpaper, or stand on Bookshelf's shelf among your books, each with a
+  look for every style. **Books this year** (books in dark cloth with the
+  count standing on top in ivory figures, a heart sticker, a glitch billboard or a
+  brass plaque, with a title of your own if you want one), **Streak flame**
+  (a flame that grows with your streak, a heart with a flame, a neon flame
+  or a candle that stands taller), **Letter board** (your own words on a
+  felt letter board, a light box, an LED marquee or a chalkboard, stars on or
+  off), **Today's pages** (a till receipt, a sticky note, a heart monitor
+  or a library card with the last few days) and **Pages turned** (every
+  page you've read, or this year's: a flip counter, a pink banner, a data
+  counter or an open book). A reader with a style already
+  on gets their looks too.
+- **Reader panel** (off until switched on in Tools > Reading Log): the
+  reader's top menu opens on a small panel: the cover, title and author,
+  two lines of figures (the page, percent, time left and this book's time
+  and days; then today's pages, time and streak in the colours of today's
+  rings beside them), a thin progress bar (this week's rings if you want
+  them), and a row of buttons in your style. Three buttons as it
+  comes (Wi-Fi, bookmarks, light), up to eight, each with any action from
+  KOReader's gesture list and an icon of your choice: a glyph, one of
+  KOReader's icons, or a PNG, JPEG or SVG of your own. Every part can be
+  switched off. Tap the open tab to come back to it. Quick to open: the
+  numbers come from a small read of today's statistics and what's in
+  memory.
+- **Today's figures on the home screen count the reading you've just done.**
+  Bookshelf 6 keeps a book open behind the shelf for a while after you go
+  home, and KOReader only saves that sitting's pages when the book really
+  closes, so the cards showed the figures from before it until KOReader
+  restarted. They now take in what the open book hasn't saved yet. The
+  ornaments on Bookshelf's top panel also look once a minute and redraw when
+  a figure they show changes.
+- **Continue reading starts with the book you're reading**, the same one
+  as Bookshelf's top card: the book open in the reader, or opened last,
+  even one you've only just started (it used to wait for the book to pass
+  0% and be saved, so the book before it showed first). Its progress is
+  the one the reader has now. A book marked finished or on hold, or read
+  to the end, still moves on to the next.
+- **Library stats count books the way Bookshelf does.** With Bookshelf,
+  each book counts under the status Bookshelf gives it, so the figures match
+  its own Shelf size card. A book marked New (or, with older Bookshelf
+  versions, one with no status) used to count as Reading if it had a
+  percentage left in it, so Reading came out higher than Bookshelf's count.
+  Continue reading follows the same rule.
+- **Simple UI: no white box round framed cards.** A card on its own that
+  draws its own frame (Cyber, Dark Academia, or Cards on their own set to
+  framed) and the ornaments no longer sit inside Simple UI's module box, so
+  there's no margin of Simple UI's colour round them over a wallpaper. The
+  other cards sit in Simple UI's box as before.
+- **Copying from a Mac:** the hidden `._` files a Mac leaves beside every
+  file it copies onto the e-reader are removed from the plugin's folder when
+  KOReader starts, so Bookshelf no longer logs "micro-module failed to load"
+  for each of them.
+- **Style: Cyber**, a third style beside Default and Cute: a black page in
+  neon yellow and cyan, cards with two corners cut off, and every card's
+  cyber look at once. Rings become rings of segments that light up (a
+  missed day in red), Continue reading a HUD with the cover in corner
+  brackets and a segmented progress bar, the Book club a data stream, the
+  Year goal a terminal syncing your latest finished books over a segmented
+  bar (SYNC COMPLETE at your goal, or shards if you'd rather), the Monthly
+  challenge a neural network the signal moves through link by link as you
+  read (a step
+  every 1.3% or so, the output node firing in magenta at 100%), the quote
+  cards a terminal window, the cover calendars covers in
+  brackets with the time read on a tag coloured by how long you read,
+  Reading trends a diagnostics readout with warning stripes on Worth a look,
+  the charts neon bars and straight lines, Today's timeline a skyline, and
+  the Finish forecast a countdown ("T-8"). The clock and page titles get a
+  glitch, and the tabs and buttons go square. Default puts your theme and
+  accents back. Each look can also be picked on its own, in any theme, light
+  or dark. The Cyber drawings live in a file of their own that is only read
+  when something uses them.
+- **Cyber** theme and two neon accents (yellow and cyan) in Look and colours.
+- **Style: Dark Academia**: parchment cards on a dark study's page, set in
+  a serif, square corners with a thin brass rule inside, and every card's
+  dark academia look at once. Rings become pocket watches (a hand each for
+  pages, minutes and streak, the covered part of the face washed in its
+  colour, the hand back at XII at the goal), Continue
+  reading hangs its cover in a gilt frame with a brass plate and writes your
+  progress with a fountain pen, the Book club keeps a tally and stamps
+  finished picks, the Year goal is an ink sketch of a globe whose triangles
+  are shaded in as you read (and gets a brass equator when you reach it),
+  the Monthly challenge is a chess board (the Immortal Game, Anderssen
+  against Kieseritzky, 1851, plays out from the starting position as you
+  read, one move every 2% or so, with a king in check marked, and ends in
+  White's checkmate at 100%, the black king knocked over on an oxblood
+  square), the quote cards are manuscript pages
+  with a big initial and a wax seal, the cover calendars hang in gilt frames,
+  Reading trends are library catalogue cards, every bar chart is a row of
+  candles (only today, or this month, lit), line charts are engraved with
+  hatching under the line and a wax seal on the latest point, Year in covers
+  is a gallery wall of gilt frames, Today's timeline is a celestial
+  chart from sun to moon, and the Finish forecast is an almanac entry
+  ("Tuesday, 3 November"). The tabs are names underlined in brass. Default
+  puts your theme and accents back, and each look can also be picked on its
+  own. Like Cyber, its drawings are only read when something uses them.
+- **Dark Academia** theme and two accents (oxblood and brass).
+- Reading trends shows the year's figure as "year: 43".
+
 ## 1.3.0
 
 - **Cover calendar:** the month's pages, books and time read along the top,
