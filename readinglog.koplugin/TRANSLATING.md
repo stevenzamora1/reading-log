@@ -1,7 +1,7 @@
 # Translating Reading Log
 
 Reading Log follows KOReader's interface language (Settings > Language), read
-once at start-up. English, Italian, Spanish, French and Brazilian Portuguese
+once at start-up. English, Italian, Spanish, French, Ukrainian and Brazilian Portuguese
 are included. There is no separate language setting; restart KOReader after
 changing the language.
 
