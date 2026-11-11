@@ -13,7 +13,7 @@ Every row is read again when the menu draws it, so the values shown are
 always the saved ones.
 
 The shared rows follow, in Simple UI's usual sections: Card height
-(Proportions), Card colour and Look and colours (Appearance), When tapped
+(Proportions), Card colour and Styles and colours (Appearance), When tapped
 (Behaviour). Simple UI then adds its own Frame, Background, Top Margin and
 Column Width.
 ]]
@@ -401,24 +401,25 @@ end
 -- Default, Cute or Cyber: every cute (or cyber) look at once (shows none
 -- when some cards have a look of their own). Cyber also picks its theme.
 local function styleItem(after)
-    return radioItem(T("Style"),
-        function() return { { "default", T("Default") }, { "cute", T("Cute") }, { "cyber", T("Cyber") }, { "academia", T("Dark Academia") } } end,
-        A.styleNow, A.setStyle, after)
+    return radioItem(T("Style"), A.styleOptions, A.styleNow, A.setStyle, after)
 end
 S.styleItem = styleItem
 
---- "Look and colours": the theme and accents every card shares.
+--- "Styles and colours": the style, theme and accents every card shares.
 function S.lookMenu(mctx)
     local function after() S.reloadAll(mctx) end
     return {
-        text = T("Look and colours"),
+        text = T("Styles and colours"),
         sub_item_table_func = function()
-            local themes = {}
-            for _, id in ipairs(A.THEME_ORDER) do themes[#themes + 1] = { id, A.THEMES[id].label } end
-            return {
-                radioItem(T("Theme"), function() return themes end, A.themeId,
-                    function(v) A.set("theme", v) end, after),
+            local items = {
                 styleItem(after),
+                -- the style's own colours, or White, Dark or Paper
+                radioItem(T("Colours"), function() return (A.colourOptions()) end,
+                    function() return select(2, A.colourOptions()) end, A.setColours, after),
+                { text = T("Get more styles") .. ELLIPSIS, keep_menu_open = true,
+                  callback = function() if A.packs then A.packs.browse(mctx) end end },
+                { text = T("Your styles") .. ELLIPSIS, keep_menu_open = true,
+                  callback = function() if A.packs then A.packs.manage(mctx) end end },
                 radioItem(T("Accent colour"), function() return accentOptions(false) end,
                     function() return (A.accentIds()) end,
                     function(v) A.set("accent", v) end, after),
@@ -428,23 +429,29 @@ function S.lookMenu(mctx)
                         return A.ACCENTS[v] and v or "matched"
                     end,
                     function(v) A.set("accent2", v ~= "matched" and v or nil) end, after),
-                radioItem(T("Cards on their own"),
-                    function() return { { "native", T("Match Simple UI") }, { "framed", T("Framed, in the theme") } } end,
-                    function() return A.standaloneNative() and "native" or "framed" end,
-                    function(v) A.set("standalone", v ~= "native" and v or nil) end, after),
-                radioItem(T("Week starts on"),
-                    function() return { { 0, T("Follow KOReader") }, { 2, T("Monday") }, { 1, T("Sunday") } } end,
-                    function() return tonumber(A.get("week_start", 0)) or 0 end,
-                    function(v) A.set("week_start", v ~= 0 and v or nil) end, after),
-                { text = T("Diagnostics") .. ELLIPSIS, keep_menu_open = true,
-                  callback = function() S.diagnostics(mctx) end },
             }
+            -- a style with its own page colour: it, or the home screen's
+            if A.theme().page and A.THEMES[A.themeId()].own then
+                items[#items + 1] = radioItem(T("Behind the Dashboard's cards"),
+                    function() return { { "style", T("The style's colour") }, { "home", T("Your home screen's") } } end,
+                    function() return A.get("style_page", "style") end,
+                    function(v) A.set("style_page", v ~= "style" and v or nil) end, after)
+            end
+            -- (only with a style that leaves the choice: the others always
+            -- frame their cards)
+            if not A.THEMES[A.themeId()].own then
+                items[#items + 1] = radioItem(T("Cards on their own"),
+                    function() return { { "native", T("Plain, like your home screen") }, { "framed", T("Framed, in the colours") } } end,
+                    function() return A.standaloneNative() and "native" or "framed" end,
+                    function(v) A.set("standalone", v ~= "native" and v or nil) end, after)
+            end
+            return items
         end,
     }
 end
 
 local function tapItem(name, after)
-    return radioItem(T("When tapped"),
+    local item = radioItem(T("When tapped"),
         function() return S.tapOptions(name) end,
         function() return S.tapValue(name) end,
         function(v)
@@ -461,6 +468,34 @@ local function tapItem(name, after)
             end
             return label
         end)
+    -- and anything KOReader can do, from the same list as gestures
+    if A.host.actionRows then return item end
+    local values, items_of = item.value_func, item.sub_item_table_func
+    item.value_func = function()
+        local ko = S.customKO(name)
+        if ko then return shorten(ko.label or T("an action"), 26) end
+        return values()
+    end
+    item.mandatory_func = item.value_func
+    item.sub_item_table_func = function()
+        local t = items_of()
+        t[#t + 1] = {
+            text = T("Any KOReader action") .. ELLIPSIS,
+            checked_func = function() return S.customKO(name) ~= nil end,
+            keep_menu_open = true,
+            callback = function(touchmenu_instance)
+                local ko = S.customKO(name)
+                S.pickKOAction(ko and ko.action, function(entry)
+                    if entry then A.set(name .. "_tap_action", entry)
+                    elseif entry == false then A.set(name .. "_tap_action", nil) end
+                    if touchmenu_instance then pcall(touchmenu_instance.updateItems, touchmenu_instance) end
+                    if after then after() end
+                end)
+            end,
+        }
+        return t
+    end
+    return item
 end
 
 local function colourItem(name, env_fn, after)
@@ -519,7 +554,7 @@ function S.cardMenu(name, mctx, ctx_menu, o)
         local fn = S.ROWS[name]
         if not fn then return {} end
         local ok, rows = pcall(fn, env_fn(), api, mctx)
-        return ok and rows or {}
+        return ok and S.orderRows(rows) or {}
     end, after)
     if def.slots and not o.nested then
         table.insert(content, 1, radioItem(T("This card shows"),
@@ -547,16 +582,9 @@ function S.dashboardMenu(mctx, ctx_menu)
     local function after() S.reload(mctx) end
     local key_h = A.screenKey(mctx.pfx, mctx.mod_id, "dash_height")
     local content = {
-        { text = T("Pages and cards") .. ELLIPSIS, keep_menu_open = true,
+        { text = T("Dashboard pages") .. ELLIPSIS, keep_menu_open = true,
           callback = function() A.dashEditPages(mctx, nil) end },
-        styleItem(function() S.reloadAll(mctx) end),
-        radioItem(T("Margin around the page"),
-            function() return { { "none", T("None") }, { "small", T("Small") }, { "medium", T("Medium") } } end,
-            function()
-                local v = A.get("dash_margin", "small")
-                return A.DASH_MARGINS[v] and v or "small"
-            end,
-            function(v) A.set("dash_margin", v ~= "small" and v or nil) end, after),
+        S.lookMenu(mctx),
         {
             text = T("Card settings"),
             sub_item_table_func = function()
@@ -579,14 +607,13 @@ function S.dashboardMenu(mctx, ctx_menu)
                 return items
             end,
         },
-        { text = T("Put the whole Dashboard back as it came") .. ELLIPSIS, keep_menu_open = true,
+        { text = T("Reset to default") .. ELLIPSIS, keep_menu_open = true,
           callback = function()
               local UIManager = require("ui/uimanager")
               local ConfirmBox = require("ui/widget/confirmbox")
               UIManager:show(ConfirmBox:new{
-                  text = T("Put every page, tab and row of the Dashboard back as it came?") .. "\n\n"
-                      .. T("Pages you added are removed. Each card's own settings and the colours are kept."),
-                  ok_text = T("Put back"),
+                  text = T("Reset the Dashboard to default?\n\nEvery page, tab and row goes back to how it came, and pages you added are removed. Each card's own settings and the colours are kept."),
+                  ok_text = T("Reset"),
                   ok_callback = function()
                       A.resetDashboard()
                       after()
@@ -603,7 +630,7 @@ function S.dashboardMenu(mctx, ctx_menu)
                 function() return A.dashHeightMode(mctx.pfx, mctx.mod_id) end,
                 function(v) A.set(key_h, v ~= "fill" and v or nil) end, after),
                 textItem(mctx, after, T("all the Dashboard's cards")) },
-            extra = { S.lookMenu(mctx) },
+            extra = {},
         },
     }
     return assemble(ctx_menu, spec)

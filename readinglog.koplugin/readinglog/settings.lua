@@ -11,7 +11,7 @@ S.pick / S.date), and shown two ways:
     with Simple UI, the few flows that are dialogs by nature (the Dashboard's
     page editor, the book club's picks, a month's books).
 After the card's own options come the rows every card shares: what a tap on
-it does, its colour, its height, and "Look and colours" (theme, accents, week
+it does, its colour, its height, and "Styles and colours" (theme, accents, week
 start), which applies to all the cards at once.
 ]]
 
@@ -80,6 +80,30 @@ function S.open(ctx, title, rows_fn, all)
 end
 
 function S.header(text) return { { text = text, enabled = false }, _sui = { kind = "header", text = text } } end
+
+-- A card's own settings in the same order on every card: what it shows,
+-- then how it looks, then what tapping part of it does. (Each heading and the
+-- rows under it move together; their order among themselves stays.)
+local LOOK_HEADS = { "Look", "Look, for both cover calendars", "Charts, on every card", "Style",
+    "Shape, for every rings card", "Heart colours", "A broken heart when you miss", "Streak ring fills at" }
+local TAP_HEADS = { "Tapping a quote opens", "Tapping a cover", "Tapping the cover" }
+function S.orderRows(rows)
+    local look, tap = {}, {}
+    for _, h in ipairs(LOOK_HEADS) do look[T(h)] = true end
+    for _, h in ipairs(TAP_HEADS) do tap[T(h)] = true end
+    local parts = { {}, {}, {} }
+    local into = parts[1]
+    for _, r in ipairs(rows) do
+        local head = type(r) == "table" and r._sui and r._sui.kind == "header" and r._sui.text
+        if head then
+            into = (look[head] and parts[2]) or (tap[head] and parts[3]) or parts[1]
+        end
+        into[#into + 1] = r
+    end
+    local out = {}
+    for _, part in ipairs(parts) do for _, r in ipairs(part) do out[#out + 1] = r end end
+    return out
+end
 
 -- A row of radio buttons. options = { { value, label }, ... }
 function S.radio(api, options, current, on_pick)
@@ -371,8 +395,27 @@ local function countOn(list)
     for _, kv in ipairs(list) do if A.get(kv[1]) == kv[2] then on = on + 1 end end
     return on
 end
+-- A downloaded style (stylepacks.lua) is "pack:<id>".
+local function packOf(v)
+    local id = type(v) == "string" and v:match("^pack:(.+)$")
+    return id and A.packs and A.packs.get(id) or nil
+end
+-- whether a theme is one a style brings (Cyber, Dark Academia, a pack's)
+local function styleTheme(id)
+    for _, t in pairs(STYLE_THEME) do if t == id then return true end end
+    local th = A.THEMES[id]
+    return th and th.pack ~= nil or false
+end
 function A.styleNow()
     pcall(fillAddedLooks)
+    local p = A.packs and A.packs.active()
+    if p then
+        -- every look the pack sets, and its theme if it has one
+        -- (its colours can be swapped for White, Dark or Paper in Colours:
+        -- it's still the same style)
+        if countOn(p.looks) == #p.looks then return "pack:" .. p.id end
+        return "mixed"
+    end
     local cute, cyber, acad = countOn(CUTE), countOn(CYBER), countOn(ACADEMIA)
     if cute == #CUTE then return "cute" end
     if cyber == #CYBER then return "cyber" end
@@ -381,42 +424,134 @@ function A.styleNow()
     return "mixed"
 end
 function A.setStyle(v)
-    local list = (v == "cute" and CUTE) or (v == "cyber" and CYBER) or (v == "academia" and ACADEMIA) or nil
+    local pack = packOf(v)
+    local list = (v == "cute" and CUTE) or (v == "cyber" and CYBER) or (v == "academia" and ACADEMIA) or (pack and pack.looks) or nil
     for _, l in ipairs({ CUTE, CYBER, ACADEMIA }) do for _, kv in ipairs(l) do A.set(kv[1], nil) end end
+    local was = A.packs and A.packs.active()
+    if was then for _, kv in ipairs(was.looks) do A.set(kv[1], nil) end end
+    A.set("style_pack", pack and pack.id or nil)
     if list then for _, kv in ipairs(list) do A.set(kv[1], kv[2]) end end
-    local own = STYLE_THEME[v]
+    local own = STYLE_THEME[v] or (pack and pack.theme_id)
     if own then
         -- the theme and accents from before (kept when going from one such
-        -- style straight to the other)
-        if not STYLE_THEME[A.themeId()] then
-            A.set("style_before", { theme = A.get("theme", nil), accent = A.get("accent", nil), accent2 = A.get("accent2", nil) })
+        -- style straight to another)
+        if not styleTheme(A.themeId()) then
+            A.set("style_before", { theme = A.get("theme", nil) or false, accent = A.get("accent", nil) or false,
+                accent2 = A.get("accent2", nil) or false })
         end
         A.set("theme", own)
         A.set("accent", nil)
         A.set("accent2", nil)
     else
-        -- leaving Cyber or Dark Academia: the theme and accents from before
-        -- it, if the style picked the theme (one picked by hand stays)
+        -- leaving a style with a theme of its own: the theme and accents
+        -- from before it. A style's theme (Cyber, Dark Academia, a pack's)
+        -- doesn't stay behind under another style: with nothing saved from
+        -- before (the theme was picked by hand, or by an older version),
+        -- it goes back to the default theme.
         local before = A.get("style_before", nil)
-        if type(before) == "table" and STYLE_THEME[A.themeId()] then
-            A.set("theme", before.theme)
-            A.set("accent", before.accent)
-            A.set("accent2", before.accent2)
+        if styleTheme(A.themeId()) then
+            if type(before) == "table" then
+                A.set("theme", before.theme or nil)
+                A.set("accent", before.accent or nil)
+                A.set("accent2", before.accent2 or nil)
+            else
+                A.set("theme", nil)
+                A.set("accent", nil)
+                A.set("accent2", nil)
+            end
         end
         if before ~= nil then A.set("style_before", nil) end
     end
 end
+
+-- Colours: the style's own (with a style that brings some: Cyber, Dark
+-- Academia, a downloaded one), or White, Dark or Paper.
+local PLAIN_THEMES = { "white", "dark", "paper" }
+function A.styleThemeId()
+    local p = A.packs and A.packs.active()
+    if p then return p.theme_id end
+    local ok, now = pcall(A.styleNow)
+    return ok and STYLE_THEME[now] or nil
+end
+--- The choices, and which one is on.
+function A.colourOptions()
+    local out = {}
+    local own = A.styleThemeId()
+    if own and A.THEMES[own] then
+        out[#out + 1] = { "style", T("The style's") .. " (" .. A.THEMES[own].label .. ")" }
+    end
+    local cur = A.themeId()
+    local listed = cur == own
+    for _, id in ipairs(PLAIN_THEMES) do
+        out[#out + 1] = { id, A.THEMES[id].label }
+        if id == cur then listed = true end
+    end
+    -- a style's colours kept on without the style (set by an older version)
+    if not listed then out[#out + 1] = { cur, A.THEMES[cur].label } end
+    return out, (own and cur == own) and "style" or cur
+end
+function A.setColours(v)
+    if v == "style" then v = A.styleThemeId() end
+    if v and A.THEMES[v] then A.set("theme", v) end
+end
+
+-- Every style to choose from: the four built in, then the downloaded ones.
+function A.styleOptions()
+    local out = { { "default", T("Default") }, { "cute", T("Cute") }, { "cyber", T("Cyber") }, { "academia", T("Dark Academia") } }
+    if A.packs then
+        -- built-in styles taken off the list (unless one is on now)
+        local now = A.styleNow()
+        local kept = {}
+        for _, o in ipairs(out) do
+            if not (A.packs.BUILTIN[o[1]] and A.packs.hidden(o[1]) and now ~= o[1]) then kept[#kept + 1] = o end
+        end
+        out = kept
+        for _, id in ipairs(A.packs.ids()) do out[#out + 1] = { "pack:" .. id, A.packs.get(id).name } end
+    end
+    return out
+end
+
+-- The Style choice as radio rows, four to a row (for Simple UI's menus,
+-- one list of all of them).
+function S.styleRadios(api, ctx)
+    local opts = A.styleOptions()
+    local now = A.styleNow()
+    local rows = {}
+    for i = 1, #opts, 4 do
+        local chunk = {}
+        for k = i, math.min(i + 3, #opts) do chunk[#chunk + 1] = opts[k] end
+        local row = S.radio(api, chunk, now, function(v) A.setStyle(v); reloadAll(ctx) end)
+        if i == 1 then row._sui.options = opts else row._sui = { kind = "skip" } end
+        rows[#rows + 1] = row
+    end
+    return rows
+end
+
+-- "Get more styles..." (the list on GitHub) and "Your styles..." (the ones
+-- on this reader: hide the built-in ones, delete downloaded ones).
+function S.moreStylesRow(api, ctx)
+    local row = { { text = T("Get more styles") .. ELLIPSIS, callback = function()
+        api.close()
+        if A.packs then A.packs.browse(ctx) end
+    end }, { text = T("Your styles") .. ELLIPSIS, callback = function()
+        api.close()
+        if A.packs then A.packs.manage(ctx) end
+    end } }
+    return row
+end
+
 function S.styleRows(api, ctx)
     local now = A.styleNow()
-    return {
-        S.header(T("Style")),
-        S.radio(api, { { "default", T("Default") }, { "cute", T("Cute") }, { "cyber", T("Cyber") }, { "academia", T("Dark Academia") } }, now,
-            function(v) A.setStyle(v); reloadAll(ctx) end),
-        S.header((now == "mixed" and T("Some cards have a look of their own."))
-            or (now == "cyber" and T("Cyber turns on every card's cyber look at once, on a black page."))
-            or (now == "academia" and T("Dark Academia turns on every card's dark academia look at once, on parchment."))
-            or T("Cute turns on every card's cute look at once.")),
-    }
+    local pack = A.packs and A.packs.active()
+    local rows = { S.header(T("Style")) }
+    for _, row in ipairs(S.styleRadios(api, ctx)) do rows[#rows + 1] = row end
+    rows[#rows + 1] = S.header((now == "mixed" and T("Some cards have a look of their own."))
+        or (now == "cyber" and T("Cyber turns on every card's cyber look at once, on a black page."))
+        or (now == "academia" and T("Dark Academia turns on every card's dark academia look at once, on parchment."))
+        or (pack and pack.description ~= "" and pack.description)
+        or T("Cute turns on every card's cute look at once."))
+    rows[#rows + 1] = S.moreStylesRow(api, ctx)
+    return rows
 end
 
 -- Rings or hearts: one choice for every rings card (Activity, Week and Month
@@ -464,8 +599,10 @@ ROWS.activity = function(env, api, ctx)
     return addAll(rows, S.shapeRows(api, ctx))
 end
 
-ROWS.goal = function(env, api)
+ROWS.goal = function(env, api, ctx)
     local target, other = D.yearGoal()
+    local coll = env.cfg("coll", nil)
+    local coll_set, coll_n = D.collectionSet(coll)
     local cur = env.cfg("look", "number")
     local pick = function(v) env.setcfg("look", v ~= "number" and v or nil) end
     local first = S.radio(api, { { "number", T("Number") }, { "jar", T("Jar of hearts") }, { "shards", T("Shards") } }, cur, pick)
@@ -475,12 +612,22 @@ ROWS.goal = function(env, api)
         { "terminal", T("Terminal") }, { "globe", T("Globe") } }
     second._sui = { kind = "skip" }
     local rows = {
-        S.input(api, T("Books this year"), target, function(v) D.setYearGoal(v) end,
-            { number = true, min = 1, max = A.host.GOALS.year_max, description = A.host.GOALS.year_note }),
-        S.header(T("Look")),
-        first, second,
+        S.pick(ctx, api, T("Collection"), collectionOptions(T("All books")), coll or "",
+            function(v) env.setcfg("coll", v ~= "" and v or nil) end),
     }
-    if A.host.ownOtherBooks() then
+    if coll_set then
+        -- only that collection's books count, against this card's own number
+        rows[#rows + 1] = S.input(api, T("Books to read"), A.collGoal(env.cfg, coll_n),
+            function(v) env.setcfg("coll_target", v) end,
+            { number = true, min = 1, max = 10000, description = A.tr("Books from %1 to finish this year.", D.collectionLabel(coll)) })
+    else
+        rows[#rows + 1] = S.input(api, T("Books this year"), target, function(v) D.setYearGoal(v) end,
+            { number = true, min = 1, max = A.host.GOALS.year_max, description = A.host.GOALS.year_note })
+    end
+    rows[#rows + 1] = S.header(T("Look"))
+    rows[#rows + 1] = first
+    rows[#rows + 1] = second
+    if not coll_set and A.host.ownOtherBooks() then
         rows[#rows + 1] = S.input(api, T("Read outside KOReader"), other, function(v) D.setOtherBooks(v) end,
             { number = true, min = 0, max = 1000, description = T("Paper books, audiobooks or another reader. Added to this year's count.") })
     end
@@ -544,11 +691,23 @@ ROWS.pages_turned = function(env, api)
 end
 
 ROWS.total_pages = function(env, api)
-    return {
+    local function shown(key, label)
+        return {
+            S.header(label),
+            S.radio(api, { { "on", T("Shown") }, { "off", T("Hidden") } }, env.cfg(key, "on"),
+                function(v) env.setcfg(key, v ~= "on" and v or nil) end),
+        }
+    end
+    local rows = {}
+    for _, p in ipairs({ { "show_year", T("This year") }, { "show_month", T("This month") }, { "show_week", T("This week") } }) do
+        for _, r in ipairs(shown(p[1], p[2])) do rows[#rows + 1] = r end
+    end
+    for _, r in ipairs({
         S.header(T("Look")),
         S.radio(api, { { "plain", T("Plain") }, { "worm", T("Hearts") }, { "counter", T("Data counter") }, { "ledger", T("Ledger") } },
             env.cfg("look", "plain"), function(v) env.setcfg("look", v ~= "plain" and v or nil) end),
-    }
+    }) do rows[#rows + 1] = r end
+    return rows
 end
 
 ROWS.device = function(env, api)
@@ -835,7 +994,7 @@ function S.controlButton(ctx, i, back)
             end } }
         end
         rows[#rows + 1] = S.input(api, T("Name"), e.label or "", function(v) changed({ label = v }) end)
-        rows[#rows + 1] = { { text = T("Put this button back as it came"), callback = function()
+        rows[#rows + 1] = { { text = T("Reset this button to default"), callback = function()
             A.setControlButton(i, nil)
             api.changed()
         end } }
@@ -885,6 +1044,11 @@ ROWS.mini = function(env, api, ctx)
         rows[#rows + 1] = S.pick(ctx, api, T("Card ") .. i, options, env.cfg("tile" .. i, A.MINI_DEFAULT[i] or "none"),
             function(v) env.setcfg("tile" .. i, v) end)
     end
+    -- three cards or more: side by side, or the first on the left and the
+    -- rest on top of each other on the right
+    rows[#rows + 1] = S.header(T("With three cards or more"))
+    rows[#rows + 1] = S.radio(api, { { "auto", T("Auto") }, { "row", T("Side by side") }, { "stack", T("Stacked on the right") } },
+        env.cfg("layout", "auto"), function(v) env.setcfg("layout", v ~= "auto" and v or nil) end)
     local control = { { text = T("Control centre buttons") .. ELLIPSIS, callback = function()
         api.close()
         S.card("control", ctx, function() return A.makeEnv("control", ctx, 0, 0) end)
@@ -956,6 +1120,19 @@ local function quoteLook(api, ctx)
     return sharedLook(api, ctx, T("Look, for every quote card"), "quote_look",
         { { "plain", T("Plain") }, { "paper", T("Notebook paper") }, { "terminal", T("Terminal") }, { "manuscript", T("Manuscript") } })
 end
+-- What counts as a finished book, for every card that counts them (one
+-- setting; also in Tools > Reading Log).
+function S.finishedRows(api, ctx)
+    return sharedLook(api, ctx, T("A book counts as finished when"), "finished_by",
+        { { "marked", T("Marked finished") }, { "read", T("Read to the end") }, { "either", T("Either") } })
+end
+
+-- what a tap on a quote opens, for every quote card
+local function quoteTap(api)
+    return S.header(T("Tapping a quote opens")),
+        S.radio(api, { { "book", T("The book, where you left off") }, { "highlight", T("The highlighted passage") } },
+            A.get("quote_tap", "book"), function(v) A.set("quote_tap", v ~= "book" and v or nil) end)
+end
 local function calendarLook(api, ctx)
     return sharedLook(api, ctx, T("Look, for both cover calendars"), "calendar_look",
         { { "plain", T("Plain") }, { "polaroid", T("Polaroids") }, { "brackets", T("Brackets") }, { "gilt", T("Gilt frames") } })
@@ -963,6 +1140,7 @@ end
 
 ROWS.quote = function(env, api, ctx)
     local h1, r1 = quoteLook(api, ctx)
+    local h2, r2 = quoteTap(api)
     return {
         S.header(T("A new highlight from your books each day.")),
         { { text = T("Show another quote"), callback = function()
@@ -970,12 +1148,14 @@ ROWS.quote = function(env, api, ctx)
             api.changed()
         end } },
         h1, r1,
+        h2, r2,
     }
 end
 
 for _, name in ipairs{ "quote2", "quote3", "quote4" } do
     ROWS[name] = function(_, api, ctx)
         local h1, r1 = quoteLook(api, ctx)
+        local h2, r2 = quoteTap(api)
         return {
             S.header(T("A pick of its own, never the same highlight as your other quote cards.")),
             { { text = T("Show another quote"), callback = function()
@@ -983,6 +1163,7 @@ for _, name in ipairs{ "quote2", "quote3", "quote4" } do
                 api.changed()
             end } },
             h1, r1,
+            h2, r2,
         }
     end
 end
@@ -1129,6 +1310,44 @@ ROWS.longest_year = function(env, api)
 end
 ROWS.longest_month = ROWS.longest_year
 
+ROWS.pages_goal = function(env, api, ctx)
+    local period = env.cfg("period", "year")
+    local target = A.pagesGoalTarget(env.cfg, period)
+    return {
+        S.pick(ctx, api, T("Collection"), collectionOptions(T("All books")), env.cfg("coll", ""),
+            function(v) env.setcfg("coll", v ~= "" and v or nil) end),
+        S.header(T("Goal for")),
+        S.radio(api, { { "year", T("This year") }, { "month", T("This month") }, { "week", T("This week") } }, period,
+            function(v) env.setcfg("period", v ~= "year" and v or nil) end),
+        S.input(api, T("Pages to read"), target, function(v) env.setcfg("target_" .. period, v) end,
+            { number = true, min = 10, max = 1000000, description = T("How many pages to read in that time.") }),
+    }
+end
+
+ROWS.finish_speed = function(env, api)
+    return {
+        S.header(T("Books from")),
+        S.radio(api, { { "year", T("This year") }, { "12m", T("Last 12 months") } }, env.cfg("period", "year"),
+            function(v) env.setcfg("period", v ~= "year" and v or nil) end),
+        S.header(T("Dot colours")),
+        S.radio(api, { { "theme", T("Style colours") }, { "covers", T("Book covers") }, { "accent", T("One colour") } }, env.cfg("dots", "theme"),
+            function(v) env.setcfg("dots", v ~= "theme" and v or nil) end),
+    }
+end
+
+ROWS.decades = function(env, api, ctx)
+    return {
+        S.pick(ctx, api, T("Collection"), collectionOptions(T("All books")), env.cfg("coll", ""),
+            function(v) env.setcfg("coll", v ~= "" and v or nil) end),
+        S.header(T("Books counted")),
+        S.radio(api, { { "library", T("Every book") }, { "finished", T("Finished books") } }, env.cfg("books", "library"),
+            function(v) env.setcfg("books", v ~= "library" and v or nil) end),
+        S.header(T("Dot colours")),
+        S.radio(api, { { "theme", T("Style colours") }, { "covers", T("Book covers") }, { "accent", T("One colour") } }, env.cfg("dots", "theme"),
+            function(v) env.setcfg("dots", v ~= "theme" and v or nil) end),
+    }
+end
+
 ROWS.month_chart = function(env, api)
     return {
         S.header(T("Bars show")),
@@ -1182,18 +1401,19 @@ local function accentPicker(ctx, title, key, current, auto_label, back)
     end, true)
 end
 
-function S.look(ctx, back)
-    local function again() S.look(ctx, back) end
-    S.open(ctx, T("Look and colours"), function(api)
-        local themes = {}
-        for _, id in ipairs(A.THEME_ORDER) do themes[#themes + 1] = { id, A.THEMES[id].label } end
+--- o.tools: opened from Tools > Reading Log, which also has the Dashboard's
+--- margin (left out of the quicker long-press menus).
+function S.look(ctx, back, o)
+    o = o or {}
+    local function again() S.look(ctx, back, o) end
+    S.open(ctx, T("Styles and colours"), function(api)
+        local colours, colour_on = A.colourOptions()
         local a1, a2 = A.accentIds()
         local matched = A.get("accent2", nil) == nil
         local rows = {
-            S.header(T("Theme")),
-            S.radio(api, themes, A.themeId(), function(v) A.set("theme", v) end),
             S.header(T("Style")),
-            S.styleRows(api, ctx)[2],
+            S.header(T("Colours")),
+            S.radio(api, colours, colour_on, A.setColours),
             -- Two accent colours, used for labels, rings, bars and buttons.
             -- A card's own "Card colour" setting decides which of the two leads.
             { { text = T("Accent colour: ") .. A.ACCENTS[a1].label, callback = function()
@@ -1205,20 +1425,39 @@ function S.look(ctx, back)
                 accentPicker(ctx, T("Second accent"), "accent2", (not matched) and a2 or nil,
                     T("Matched to the first"), again)
             end } },
-            -- Cards placed on their own on the home screen (not in the
-            -- Dashboard): the app's own look, or the theme's frame.
-            S.header(T("Cards on their own")),
-            S.radio(api, { { "native", A.host.KIND == "bookshelf" and T("Match Bookshelf") or T("Match Simple UI") }, { "framed", T("Framed, in the theme") } },
-                A.standaloneNative() and "native" or "framed",
-                function(v) A.set("standalone", v ~= "native" and v or nil) end),
-            S.header(T("Week starts on")),
-            S.radio(api, { { 0, T("Follow KOReader") }, { 2, T("Monday") }, { 1, T("Sunday") } },
-                tonumber(A.get("week_start", 0)) or 0, function(v) A.set("week_start", v ~= 0 and v or nil) end),
         }
-        rows[#rows + 1] = { { text = T("Diagnostics") .. ELLIPSIS, callback = function()
-            api.close()
-            S.diagnostics(ctx, again)
-        end } }
+        -- The space around the Dashboard's page
+        if o.tools then
+        rows[#rows + 1] = S.header(T("Dashboard margin"))
+        rows[#rows + 1] = S.radio(api, { { "none", T("None") }, { "small", T("Small") }, { "medium", T("Medium") } },
+            (A.DASH_MARGINS or {})[A.get("dash_margin", "small")] and A.get("dash_margin", "small") or "small",
+            function(v) A.set("dash_margin", v ~= "small" and v or nil) end)
+        end
+        -- A style with its own page colour: paint it behind the Dashboard's
+        -- cards, or leave the home screen's own background there
+        if A.theme().page and A.THEMES[A.themeId()].own then
+            rows[#rows + 1] = S.header(T("Behind the Dashboard's cards"))
+            rows[#rows + 1] = S.radio(api, { { "style", T("The style's colour") }, { "home", T("Your home screen's") } },
+                A.get("style_page", "style"), function(v) A.set("style_page", v ~= "style" and v or nil) end)
+        end
+        -- Cards placed on their own on the home screen (not in the
+        -- Dashboard): the app's own look, or the theme's frame. Only with a
+        -- style that leaves the choice (the others always frame them).
+        if not A.THEMES[A.themeId()].own then
+            rows[#rows + 1] = S.header(T("Cards on their own"))
+            rows[#rows + 1] = S.radio(api, { { "native", A.host.KIND == "bookshelf" and T("Match Bookshelf") or T("Plain, like your home screen") }, { "framed", T("Framed, in the colours") } },
+                A.standaloneNative() and "native" or "framed",
+                function(v) A.set("standalone", v ~= "native" and v or nil) end)
+        end
+        -- the Style choice (built in and downloaded) and Get more styles...
+        for i, row in ipairs(rows) do
+            if row._sui and row._sui.kind == "header" and row._sui.text == T("Style") then
+                local add = S.styleRadios(api, ctx)
+                add[#add + 1] = S.moreStylesRow(api, ctx)
+                for k = #add, 1, -1 do table.insert(rows, i + 1, add[k]) end
+                break
+            end
+        end
         if back then
             rows[#rows + 1] = { { text = T("Back"), callback = function() api.close(); back() end } }
         end
@@ -1354,6 +1593,52 @@ local function tapChooserBookshelf(ctx, name, back)
     end)
 end
 
+--- KOReader's own list of actions (the one gestures use), in a menu of its
+--- own: for home screens without an action chooser of their own (ZenOS,
+--- Simple UI). on_done(entry) is called when the menu closes: { label,
+--- action } for the action(s) picked, false for Nothing, nil if unchanged.
+function S.pickKOAction(current, on_done)
+    local okd, Dispatcher = pcall(require, "dispatcher")
+    local okt, TouchMenu = pcall(require, "ui/widget/touchmenu")
+    if not (okd and okt and Dispatcher and Dispatcher.addSubMenu) then return false end
+    local CenterContainer = require("ui/widget/container/centercontainer")
+    local Screen = require("device").screen
+    local UIManager = require("ui/uimanager")
+    local copy
+    if type(current) == "table" then
+        copy = {}
+        for k, v in pairs(current) do copy[k] = v end
+    end
+    local holder, caller = { action = copy }, {}
+    local items = { icon = "appbar.settings" }
+    local ok = pcall(Dispatcher.addSubMenu, Dispatcher, caller, items, holder, "action")
+    if not ok then return false end
+    local container = CenterContainer:new{ covers_header = true, ignore = "height", dimen = Screen:getSize() }
+    local menu = TouchMenu:new{ width = Screen:getWidth(), tab_item_table = { items }, show_parent = container }
+    menu.close_callback = function()
+        UIManager:close(container)
+        if not caller.updated then return on_done(nil) end
+        local a = holder.action
+        local okc, n = pcall(Dispatcher._itemsCount, Dispatcher, a or {})
+        if type(a) == "table" and okc and (n or 0) > 0 then
+            local okl, label = pcall(Dispatcher.menuTextFunc, Dispatcher, a)
+            return on_done({ label = (okl and label and label ~= "") and label or T("an action"), action = a })
+        end
+        return on_done(false)
+    end
+    container[1] = menu
+    UIManager:show(container)
+    return true
+end
+
+-- A tap action picked from KOReader's list (not one of the built-in two,
+-- not a Quick Action)?
+local function customKO(name)
+    local e = A.tapAction(name)
+    return e and type(e.action) == "table" and not e.builtin and not e.qa and e or nil
+end
+S.customKO = customKO
+
 function S.tapChooser(ctx, name, back)
     if A.host.actionRows then return tapChooserBookshelf(ctx, name, back) end
     local def = P[name]
@@ -1367,6 +1652,18 @@ function S.tapChooser(ctx, name, back)
                 if back then back() end
             end } }
         end
+        -- anything KOReader can do, from the same list as gestures
+        local ko = customKO(name)
+        rows[#rows + 1] = { { text = (ko and (CHECK .. shorten(ko.label or T("an action"), 40)) or T("Any KOReader action")) .. ELLIPSIS,
+            callback = function()
+                api.close()
+                local shown = S.pickKOAction(ko and ko.action, function(entry)
+                    if entry then A.set(name .. "_tap_action", entry)
+                    elseif entry == false then A.set(name .. "_tap_action", nil) end
+                    S.tapChooser(ctx, name, back)
+                end)
+                if not shown then S.tapChooser(ctx, name, back) end
+            end } }
         rows[#rows + 1] = S.header(T("Buttons on the card (Continue, Details, the tabs) keep their own job."))
         if back then
             rows[#rows + 1] = { { text = T("Back"), callback = function() api.close(); back() end } }
@@ -1383,7 +1680,8 @@ function S.card(name, ctx, env_fn, back)
     local function show()
         S.open(ctx, def.title, function(api)
             local env = env_fn()
-            local rows = ROWS[name] and ROWS[name](env, api, ctx) or {}
+            local own = S.orderRows(ROWS[name] and ROWS[name](env, api, ctx) or {})
+            local rows = {}
             if def.slots and not env.nested and ctx and ctx.config then
                 rows[#rows + 1] = S.header(T("This card shows"))
                 local row = {}
@@ -1403,6 +1701,8 @@ function S.card(name, ctx, env_fn, back)
                 end
                 rows[#rows + 1] = row
             end
+            -- what it shows, its look and what a tap on part of it does
+            for _, r in ipairs(own) do rows[#rows + 1] = r end
             if name ~= "dashboard" then
                 rows[#rows + 1] = { { text = T("When tapped: ") .. S.tapLabel(name) .. ELLIPSIS, callback = function()
                     api.close()
@@ -1414,7 +1714,7 @@ function S.card(name, ctx, env_fn, back)
             local function pickTone(v) A.set(name .. "_tone", v) end
             rows[#rows + 1] = S.radio(api, { tones[1], tones[2] }, env.tone.name, pickTone)
             rows[#rows + 1] = S.radio(api, { tones[3], tones[4] }, env.tone.name, pickTone)
-            rows[#rows + 1] = { { text = T("Look and colours") .. ELLIPSIS, callback = function()
+            rows[#rows + 1] = { { text = T("Styles and colours") .. ELLIPSIS, callback = function()
                 api.close()
                 S.look(ctx, show)
             end } }
@@ -1425,6 +1725,83 @@ function S.card(name, ctx, env_fn, back)
         end)
     end
     show()
+end
+
+-- ─── a book's dates, by hand ─────────────────────────────────────────────────
+-- Tools > Reading Log > Change a book's dates: pick a book (the reading
+-- history, newest first), then its start and finish dates.
+
+function S.bookDates(ctx, fp, back)
+    local info = D.info(fp)
+    S.open(ctx, info.title or fp:match("[^/]+$"), function(api)
+        local cur = D.bookDates(fp)
+        local rows = {
+            S.header(T("Leave a date unset to use the reading statistics and your home screen's.")),
+            S.date(api, T("Started"), cur.start, function(v) D.setBookDates(fp, v, cur.finish) end),
+            S.date(api, T("Finished"), cur.finish, function(v) D.setBookDates(fp, cur.start, v) end),
+        }
+        if cur.start or cur.finish then
+            rows[#rows + 1] = { { text = T("Clear both dates"), callback = function()
+                D.setBookDates(fp, nil, nil)
+                api.changed()
+            end } }
+        end
+        if back then
+            rows[#rows + 1] = { { text = T("Back"), callback = function() api.close(); back() end } }
+        end
+        return rows
+    end, true)
+end
+
+function S.pickBookForDates(ctx)
+    local Menu = require("ui/widget/menu")
+    local UIManager = require("ui/uimanager")
+    local Screen = A.screen()
+    local items, seen = {}, {}
+    local ok, rh = pcall(require, "readhistory")
+    local hist = ok and rh and type(rh.hist) == "table" and rh.hist or {}
+    local menu
+    local function again() S.pickBookForDates(ctx) end
+    for _, e in ipairs(hist) do
+        local fp = e.file
+        if fp and not seen[fp] and D.fileExists(fp) then
+            seen[fp] = true
+            local info = D.info(fp)
+            local set = D.bookDates(fp)
+            items[#items + 1] = {
+                text = (info.title or fp:match("[^/]+$")) .. ((set.start or set.finish) and "  \xE2\x9C\x8E" or ""),
+                mandatory = info.author,
+                callback = function()
+                    UIManager:close(menu)
+                    S.bookDates(ctx, fp, again)
+                end,
+            }
+            if #items >= 200 then break end
+        end
+    end
+    if #items == 0 then
+        UIManager:show(require("ui/widget/infomessage"):new{ text = T("No books in your reading history yet.") })
+        return
+    end
+    menu = Menu:new{
+        title = T("Change a book's dates"),
+        item_table = items,
+        width = Screen:getWidth(), height = Screen:getHeight(),
+        covers_fullscreen = true, is_borderless = true, is_popout = false,
+    }
+    UIManager:show(menu)
+end
+
+-- what counts as finished, on the cards that count finished books
+for _, name in ipairs{ "goal", "finished", "year_covers", "finish_speed" } do
+    local own = ROWS[name]
+    ROWS[name] = function(env, api, ctx)
+        local rows = own and own(env, api, ctx) or {}
+        local h1, r1 = S.finishedRows(api, ctx)
+        rows[#rows + 1] = h1
+        rows[#rows + 1] = r1
+        return rows
+    end
 end
 
 -- the chart look, on every card with a chart

@@ -1,5 +1,217 @@
 # Changelog
 
+## 1.5.0
+
+- **A style's cards on your home screen's own background.** Styles with
+  their own page colour (Cyber, Dark Academia, Gothic, Christmas...) can
+  leave Simple UI's, Bookshelf's or ZenOS's background behind the
+  Dashboard's cards: Styles and colours > Behind the Dashboard's cards >
+  Your home screen's. Full screen keeps the style's colour.
+- **Colours instead of Theme.** A style decides how things are drawn, the
+  colours what they're drawn in. Styles and colours now has the Style
+  first, then **Colours**: the style's own (when it brings some: Cyber,
+  Dark Academia, the downloaded ones), or White, Dark or Paper. Gothic's
+  roses on White, say, are still Gothic.
+- **Styles can draw the Dashboard's tabs.** Downloaded styles get a tab bar
+  of their own: Gothic an iron fence with the open tab under an arch,
+  Christmas a garland and a ribbon, Forest a branch and a wooden sign,
+  Ocean a wave and a lifebuoy, Space stars and a planet, Honey honeycomb
+  and a bee, Winter icicles and a frosted pane.
+- **A shorter long-press menu on the Dashboard:** Dashboard pages
+  (was Pages and cards), Styles and colours, Card settings, and Reset to
+  default (was Put the whole Dashboard back as it came). The style buttons
+  that sat in it are in Styles and colours. "Put this page / button back as
+  it came" are now "Reset this page / button to default", and + Add a page
+  sits under the page buttons. Dashboard margin is only in Tools > Reading
+  Log > Styles and colours now.
+- **When tapped: any KOReader action.** On ZenOS, Simple UI and full
+  screen, a card's When tapped setting now offers **Any KOReader action…**:
+  the same list as KOReader's gestures (night mode, the frontlight, Wi-Fi,
+  a plugin, ...). Bookshelf already had its own action chooser.
+- **Simpler menus.** Tools > Reading Log is down to five items: Open the
+  dashboard, **Styles and colours…** (the style, its colours, Get more
+  styles and Your styles, in one place), **Your reading** (what counts as
+  finished, the day the week starts, a book's dates), **Reader panel**, and
+  **About and updates** (updates, Diagnostics and About). Look and colours is
+  now called Styles and colours; "Cards on their own" only shows when your
+  style leaves the choice. The reader panel's parts are under What it shows,
+  and only the buttons in use are listed, with How many as a number to pick.
+  Every card's settings go in the same order: what it shows, then its look,
+  then what a tap does.
+  The Dashboard's margin moved from its long-press menu to Styles and
+  colours.
+
+- **Dots in your style's colours.** Decades and Finish speed now colour
+  their dots from your style (its accents and chart colours, each book
+  keeping its colour), so they stand apart and still fit. **Book covers**
+  and **One colour** are still in the card's settings.
+- **Faster with a long reading history.** The reading figures, reading
+  sessions and pages turned are read in full once; after that only the days
+  since (after a sitting, just today) are read from the statistics database,
+  and what came before is kept in settings/readinglog_statscache.lua so a
+  restart starts quick too. Nothing shown changes: it's read in full again
+  whenever anything before then could have (a book's page count changing,
+  older statistics synced in, a book's statistics deleted). On a library of
+  450 books and 6 years of statistics the dashboard's first load went from
+  about 2 s to 0.7 s on a computer (more on an e-reader), and reading after a
+  sitting from 0.6 s to 0.04 s.
+- **Lifetime pages** drops its bar to the next round number (Pages goal is
+  the card for a goal now) and the "a day on average" line, so the total is
+  bigger, and its This year, This month and This week rows
+  can each be hidden in the card's settings; with all three hidden the total
+  has the card to itself.
+- **Thicker progress bars** on Continue reading and Book club, so a
+  style's bar (the snail, the bee, ...) is easier to see in small cards.
+- Fixed: on a short card or with a bigger text size, the fastest/slowest
+  (or oldest/newest) books on Finish speed and Decades could spill out of
+  the bottom of the card. They now fit, or step aside for the dots.
+- Fixed: the week in the reader panel and the small Today strip drew plain
+  rings for days to come instead of your style's own days.
+- Fixed: Pages goal cut short its "pages a day to reach it" line on a
+  narrow card; it gets a little smaller, or goes on two lines, instead.
+- **Mini dashboard: cards stacked on the right.** With three cards or more
+  and room for them, the first goes on the left and the others on top of
+  each other on the right (This week over a goal, say); up to four cards
+  now. "With three cards or more" in its settings: Auto, Side by side or
+  Stacked on the right. Cards with a set shape, like This week, sit in the
+  middle of a taller space instead of at its top.
+- **The Dashboard's pages turn faster**, full screen and on ZenOS's Home:
+  what the other pages need is worked out while you look at the first one,
+  and on ZenOS a page turn is one screen update instead of two.
+- **Cards on their own** says "Plain, like your home screen" instead of
+  "Match Simple UI" (it applies to every home screen), and it's left out
+  when the style always frames its cards (Cyber, Dark Academia and
+  downloaded styles).
+- Fixed: with a Reading Log widget at the top of ZenOS's Home, tapping the
+  top of the screen opened the card instead of Zen's menu.
+- Fixed: the Dashboard couldn't be switched on in ZenOS: it took the whole
+  Home, and Zen always keeps one of its own widgets on. It starts at 9/10 now
+  and can go to 10/10 once Zen's last widget is off.
+- Fixed: on ZenOS, the widgets kept showing the figures from before you
+  opened a book. Zen keeps its Home while you read and puts it back as it
+  was; a Reading Log widget now notices that the statistics changed and
+  draws itself again a moment later.
+- Fixed: over a Simple UI wallpaper (Background opacity below Solid), with
+  the Dashboard on your home screen's background, the plates behind the
+  banner, the page titles, the month buttons and the tabs kept Simple UI's
+  colours whatever the style. They take the style's card colours now.
+- Fixed: the full-screen Dashboard opened from Simple UI with a wallpaper
+  showing through (Background opacity below Solid) left its page unpainted,
+  so the home screen showed behind it. Full screen always paints its page.
+- Fixed: the Mini dashboard's Year goal, Monthly challenge and Continue
+  reading tiles kept the plain ring and bar with a downloaded style; they
+  use the style's drawings now, as the full cards do.
+- Fixed: the Year goal followed the year the Yearly page was stepped back
+  to; it always counts this year's books now.
+- **Styles to download.** **Get more styles…** (in Tools > Reading Log >
+  Styles and colours) lists
+  the styles in [reading-log-styles](https://github.com/stevenzamora1/reading-log-styles): tap one to download
+  it, update it or remove it. A downloaded style shows up in the Style list
+  next to Default, Cute, Cyber and Dark Academia. A style can bring its own
+  theme (card, page and frame colours, two accents), pick a look for every
+  card, and draw the rings, the progress bars and the Monthly challenge its
+  own way, dress the cover on Continue reading, and draw the Dashboard's
+  tabs. Style files can draw and nothing else: they can't open files or
+  use the network. If one fails, the usual drawing is used. How to make
+  one: the README in reading-log-styles.
+- **Your styles…** (in Styles and colours), without
+  Wi-Fi: take Cute, Cyber or
+  Dark Academia off the Style list (or put them back), and delete
+  downloaded styles from the device. Get more styles lists the three
+  built-in styles too.
+- **Christmas**, the first style to download: cream cards in gold frames on
+  a deep green page; a wreath and a candy cane for the rings, baubles for
+  the days, a tree that gets an ornament for every book, stacks of presents
+  for the bar charts, strings of lights for the lines and Today's timeline,
+  wrapped presents on Reading trends, an advent calendar, candy-cane
+  progress bars, and a present that opens to a book saying Merry Christmas
+  for the Monthly challenge.
+- **The Dashboard full screen, on its own.** Tools > Reading Log > Open the
+  dashboard, or the new **Reading Log dashboard** gesture action, shows the
+  Dashboard on a screen of its own, without Simple UI or Bookshelf. Swipe
+  left or right to turn the page, swipe down to close it, long-press a card
+  for its settings.
+- **The Yearly page goes back through the years**
+  ([#6](https://github.com/stevenzamora1/reading-log/issues/6)). The arrows
+  at the top of the Yearly page step back up to ten years, like the Monthly
+  page's months; Today comes back to this year. Time read, Longest reads,
+  Books and pages and Year in covers all show the year picked.
+- **Change a book's dates.** Tools > Reading Log > Your reading > Change a book's dates:
+  pick a book from your reading history and set when you started and when
+  you finished it, for when the statistics or your home screen have them
+  wrong. Every card uses them (Finish speed, Year goal, the year and month
+  lists, "days of reading"); a finish date also counts the book as finished
+  on that day, and goes into the book's own settings when it is marked
+  finished, so Simple UI shows the same date.
+- **What counts as finished is up to you**
+  ([#7](https://github.com/stevenzamora1/reading-log/issues/7)). Tools >
+  Reading Log > A book counts as finished when (also in the settings of Year
+  goal, Recently finished, Year in covers and Finish speed):
+  - **Marked finished** (as before): the way your home screen counts
+    finished books, on the day it was marked.
+  - **Read to the end**: KOReader's reading statistics show you reached the
+    last 1% of the book, marked finished or not, on the day you got there
+    (like Reading Insights). A book read twice counts in the year of its
+    latest read-through.
+  - **Either**: one or the other, with the statistics' date when there is one.
+- **A close button on the full-screen dashboard**: an X at the end of the
+  tab bar.
+- **Quotes can open at the highlight.** Every quote card's settings have
+  "Tapping a quote opens": the book where you left off (as before), or the
+  highlighted passage itself. The place you had reached stays on KOReader's
+  back stack, so Back takes you there.
+- **ZenOS widgets.** With [ZenOS](https://github.com/xZenLabs/zen-os) (or
+  Zen UI), every card, the Mini dashboard and the Dashboard are widgets for
+  its Home: Zen Settings > Home > Widgets. Long-press one for its settings,
+  text size and height on the Home; swipe the Dashboard widget to turn its
+  page. Books open through Zen.
+- Reading Log no longer says it needs Simple UI or Bookshelf, and Look and
+  colours and the styles are in Tools > Reading Log without them.
+- **Pages goal**, a new card: pages read this year, this month or this
+  week against a goal you set on the card, how far ahead or behind you
+  are, and how many pages a day it takes to get there.
+- **Finish speed**, a new card: a dot for each book you finished on a
+  scale from a day to a year, in your style's colours, with the days a
+  typical book takes, how many you finished in a week or less, and the
+  fastest and slowest. This year or the last 12 months.
+- **Decades**, a new card: when the books in your library were published.
+  A dot for each book on a line of years, in your style's colours, with
+  the typical year, the decade you have most books from, and the oldest
+  and newest. Count every book or only finished ones, and pick a
+  collection if you like. The years come from the book files themselves
+  (EPUB, FB2, CBZ, MOBI and AZW3), read once in the background and kept;
+  books with no date are counted separately. With Bookshelf 6.4 or newer,
+  a publication date you set in Bookshelf is the one used, so the card
+  agrees with its Decades shelf. A big library gets one dot for several
+  books of the same year (2, 5, 10 and so on, shown under the line), so the
+  chart stays readable.
+- **Goals for one collection.** Year goal and Pages goal have a Collection
+  setting: pick one and only its books count. The Year goal then has its
+  own number, the whole collection to start with, so a TBR collection
+  becomes "read all of these this year".
+- **Ukrainian**, by [advokatb](https://github.com/advokatb).
+- **Fixed: a style's theme staying behind.** With Dark Academia (or Cyber)
+  picked under Theme, switching the Style to Cute or Default kept the brown
+  (or black) page, tabs and headings under the new style's cards. A style's
+  own theme now always goes when you leave the style: back to the theme you
+  had before it, or to White.
+- **Fixed: "On pace" unreadable on dark cards.** A Monthly challenge
+  counting days drew its "On pace" pill in the card's ink colour with white
+  text, so on dark cards (Dark, Cyber, Gothic) it was white on white. The
+  text now goes dark on a light pill.
+- **Fixed: "micro-module failed to load ... unexpected symbol" in
+  Bookshelf's log** for `._alm_*.lua` files. They are hidden files a Mac
+  leaves beside the old Bookshelf copy of Reading Log's cards in
+  settings/bookshelf/micromodules (or leaves behind after them). Reading
+  Log now removes those twins of its own old files when KOReader starts.
+- **Fixed: Continue reading not growing on a taller Mini dashboard**
+  ([#9](https://github.com/stevenzamora1/reading-log/issues/9)). Only the
+  cover grew; the text stayed the same size, so a tall Mini dashboard had
+  small text in a lot of empty space while the Control centre beside it
+  grew. Continue reading and Reading and today's rings now scale their
+  title, author, progress bar, figures and rings with the card's height,
+  and the cover can take a little more of the width.
+
 ## 1.4.0
 
 - **One plugin for Simple UI and Bookshelf.** Reading Log is now a KOReader

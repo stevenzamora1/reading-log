@@ -277,7 +277,9 @@ books, each heart stands for a few books.
 
 ### Editing the Dashboard
 
-Long-press the Dashboard > Module settings > **Pages and cards**.
+Long-press the Dashboard > Module settings. The menu has four things:
+**Dashboard pages**, **Styles and colours**, **Card settings** and
+**Reset to default**. Dashboard pages is where the pages are changed:
 
 - Pick a page at the top, then tap a row to change its **Card**, what goes
   **Beside it**, its **Height**, or to move or remove it.
@@ -287,10 +289,10 @@ Long-press the Dashboard > Module settings > **Pages and cards**.
 - **+ Add a page** adds a page of your own (up to eight tabs in all). It
   starts with one card; add rows to it like any other page. **Remove this
   page** takes away a page you added.
-- **Put this page back as it came** undoes your changes to one of the
+- **Reset this page to default** undoes your changes to one of the
   built-in pages.
 - To undo everything at once, long-press the Dashboard > Module settings >
-  **Put the whole Dashboard back as it came**. Pages you added are removed;
+  **Reset to default**. Pages you added are removed;
   each card's own settings and the colours are kept.
 
 ## Cards on their own
@@ -428,7 +430,7 @@ In Tools > Reading Log > Reader panel:
   icons** (a grid of the icons KOReader ships, plus any in your own icons
   folder, drawn in the button's colour like the glyphs), or **A picture of
   your own** (a PNG, JPEG or SVG file, in its own colours). Picking a
-  new action replaces the old one. **Put this button back as it came**
+  new action replaces the old one. **Reset this button to default**
   undoes your changes.
 
 Wi-Fi, night mode, the light and adding a bookmark run with the panel left
@@ -447,12 +449,15 @@ Simple UI, add it to a page like any module.
 As it comes it shows the book you're reading (tap it to open the book), with
 a small row of today's rings under its progress (pages, minutes and streak),
 then the Control centre. Tap the rings for your reading progress.
-Long-press it > Module settings to pick up to three cards from Reading and
+Long-press it > Module settings to pick up to four cards from Reading and
 today's rings, Control centre, Continue reading, Activity rings, This week vs
 last, Week rings, Monthly challenge, Finish forecast, Year goal, Today's
 timeline, Random pick, Quote of the day, Library stats and Week in covers.
 It shows as many
-as fit, left to right. The rings goals, the challenge, the comparison, the
+as fit. With three cards or more, **With three cards or more** sets them
+**Side by side**, **Stacked on the right** (the first on the left, the
+others on top of each other beside it), or **Auto** (stacked when the Mini
+dashboard is tall enough). The rings goals, the challenge, the comparison, the
 pick and the buttons are shared with their full-size cards; **Control centre
 buttons…** in its settings opens the button editor.
 
@@ -502,9 +507,10 @@ Long-press a card > **Module settings** for its options.
 ### When tapped
 
 Every card's settings have **When tapped**: keep the card's own action, open
-the reading calendar or progress view, or run something else (with Simple
-UI, any Quick Action; with Bookshelf, a plugin, a KOReader action or a menu
-entry from its action chooser). Buttons on a card, like Continue and
+the reading calendar or progress view, or run something else: **Any
+KOReader action…** (the same list as KOReader's gestures, on ZenOS, Simple
+UI and full screen), any Simple UI Quick Action, or with Bookshelf, a plugin,
+a KOReader action or a menu entry from its action chooser. Buttons on a card, like Continue and
 Details, always keep their own job.
 
 ### Book club
@@ -612,7 +618,7 @@ you have finished books so far.
 - Tap a step on the brightness or warmth bar to jump to it, or `−` and `+`
   to move one step. Warmth only shows on a device with a warm light.
 - To put it on a Dashboard page: long-press the Dashboard > Module settings >
-  **Pages and cards**, pick the page, tap **+ Add a row**, and pick Control
+  **Dashboard pages**, pick the page, tap **+ Add a row**, and pick Control
   centre.
 
 ### Device
@@ -733,17 +739,24 @@ to 5 pm, evening 5 to 9 pm and night 9 pm to 5 am.
 
 ## Colours
 
-Long-press any card > **Look and colours** (in Bookshelf, under Module
-settings; with Simple UI, also in Tools > Reading Log). It applies to all
-cards:
+Long-press any card > **Styles and colours** (in Bookshelf, under Module
+settings; also in Tools > Reading Log). It applies to all cards:
 
-- **Theme:** White, Dark, Paper, Cyber or Dark Academia, for the Dashboard.
+- **Style:** how things are drawn: Default, Cute, Cyber, Dark Academia, or a
+  style you downloaded with **Get more styles…**.
+- **Colours:** what they're drawn in: the style's own (when it brings some:
+  Cyber, Dark Academia and the downloaded styles), or White, Dark or Paper.
 - **Accent colour** and **Second accent:** twelve colours chosen to show well
   on colour e-ink, two neon ones (yellow and cyan) that go with Cyber, and
   oxblood and brass, which go with Dark Academia.
+- With a style that has its own page colour: what's **Behind the
+  Dashboard's cards**.
+- **Dashboard margin** (the space round the Dashboard's page) is only in
+  Tools > Reading Log > Styles and colours, not in the long-press menus.
 - **Cards on their own:** match the home screen (the default) or framed in
-  the theme.
-- **Week starts on:** follow KOReader, Monday or Sunday.
+  the colours (with Default or Cute).
+
+The day the week starts on is in Tools > Reading Log > **Your reading**.
 
 Each card's own **Card colour** setting picks plain or tinted, and which of
 the two accents leads.

@@ -242,6 +242,7 @@ function A.attend(ctx)
     if fs and not _seen_views[fs] then
         _seen_views[fs] = true
         A.state.month_offset = 0
+        A.state.year_offset = 0
         D._reading = nil
         D.hurry(0.35)
     end
@@ -556,14 +557,14 @@ A.DASH_WEIGHT = {
     challenge = 0.33, forecast = 0.33, trends = 0.62, control = 0.24, compare = 0.34,
     library = 0.27, authors = 0.37, pick = 0.37, quote = 0.25, timeline = 0.27,
     calendar = 0.9, cover_week = 0.3, quote2 = 0.25, quote3 = 0.25, quote4 = 0.25, device = 0.24,
-    total_pages = 0.27,
+    total_pages = 0.27, pages_goal = 0.24, finish_speed = 0.42, decades = 0.42,
 }
 -- The order cards are offered in when editing a page.
 A.DASH_CARDS = { "banner", "continue", "activity", "week_rings", "month_rings", "month_totals", "month_chart",
-                 "when_read", "goal", "bookclub", "tbr", "genres", "year_covers", "week", "year_chart",
-                 "year_time", "heatmap", "finished", "longest_year", "longest_month", "deadline",
+                 "when_read", "goal", "pages_goal", "bookclub", "tbr", "genres", "year_covers", "week", "year_chart",
+                 "year_time", "heatmap", "finished", "longest_year", "longest_month", "finish_speed", "deadline",
                  "trends", "challenge", "forecast", "control", "device", "total_pages", "compare",
-                 "library", "authors", "pick", "quote", "timeline", "calendar", "cover_week",
+                 "library", "authors", "decades", "pick", "quote", "timeline", "calendar", "cover_week",
                  "quote2", "quote3", "quote4" }
 A.DASH_MAX_ROWS = 6
 A.DASH_MAX_PAGES = 8
@@ -726,6 +727,12 @@ local function buildDashboard(ctx, w, h)
         local CYT = A.cutTheme()
         -- the Dark Academia theme: the tab names alone, the open one underlined in brass
         local ACT = not CYT and A.academiaTheme()
+        -- a downloaded style can draw the tab bar its own way
+        local styled = #tabs > 0 and A.packTabs and A.packTabs(c, ox, by, w - 0, bar_h, tabs, page_i,
+            max(10, floor(bar_h * 0.36 * ts + 0.5)),
+            { bg = page_bg, fg = page_fg, dark = dark, accent = A.shown(dark and th.gold or th.wine),
+              accent2 = A.shown(dark and th.gold2 or th.wine2) })
+        if not styled then
         if CYT or ACT then
             -- the Cyber theme: a row of square tabs, the open one filled
             bar_w, bx = w, ox
@@ -775,6 +782,7 @@ local function buildDashboard(ctx, w, h)
             c:put(t_tab, cx, by + bar_h / 2, "c", "mid")
             c:region("tab:" .. i, cx - cell / 2, by, cell, bar_h)
         end
+        end
         body_h = h - bar_h - gap
     end
 
@@ -798,10 +806,14 @@ local function buildDashboard(ctx, w, h)
         local refresh = ownRefresh(ctx)
         local st = D.stats(refresh)
         local dot = "  \xE2\x80\xA2  "
+        A.state.nav_for = page.kicker
         if page.kicker == "year" then
-            -- "2026 · 29 books"
-            local yr = D.year(refresh)
-            kicker = os.date("%Y") .. (yr and (dot .. A.plural(yr.total, "book", "books")) or "")
+            -- "2026 · 29 books", and the switcher that steps back through
+            -- the years gone by
+            local vy, current = A.viewYear()
+            local yr = D.yearOf(refresh, vy)
+            kicker = tostring(vy) .. (yr and (dot .. A.plural(yr.total, "book", "books")) or "")
+            nav = { prev = (tonumber(A.state.year_offset) or 0) > -D.BACK_YEARS, next = not current, today = not current }
         elseif page.kicker == "month" then
             -- "October · day 8 of 31", or for a month gone by "September · 30 days";
             -- and the switcher that steps back through the last twelve months
@@ -925,13 +937,16 @@ end
 
 -- The Monthly page's month switcher: back up to twelve months, forward to
 -- this one; Today (shown once you have stepped away) comes straight back.
+-- On the Yearly page the same arrows step through the years instead.
 local function stepMonth(which)
-    local off = tonumber(A.state.month_offset) or 0
+    local key, back = "month_offset", D.BACK_MONTHS
+    if A.state.nav_for == "year" then key, back = "year_offset", D.BACK_YEARS end
+    local off = tonumber(A.state[key]) or 0
     local new = off
-    if which == "prev" then new = max(-D.BACK_MONTHS, off - 1)
+    if which == "prev" then new = max(-back, off - 1)
     elseif which == "next" then new = min(0, off + 1)
     elseif which == "now" then new = 0 end
-    A.state.month_offset = new
+    A.state[key] = new
     return new ~= off
 end
 
@@ -1134,6 +1149,10 @@ local function editPages(ctx, back)
             if #line == 4 then out[#out + 1] = line; line = {} end
         end
         if #line > 0 then out[#out + 1] = line end
+        out[#out + 1] = { { text = T("+ Add a page"), enabled = #pages < A.DASH_MAX_PAGES, callback = function()
+            A.state.edit_page = A.addPage() or A.state.edit_page
+            api.changed()
+        end } }
         local rows, edited = pageRows(page)
         out[#out + 1] = S.header(T("Rows, top to bottom (tap one to change it)"))
         for i, row in ipairs(rows) do
@@ -1180,15 +1199,11 @@ local function editPages(ctx, back)
                 api.changed()
             end } }
         else
-            out[#out + 1] = { { text = T("Put this page back as it came"), enabled = edited, callback = function()
+            out[#out + 1] = { { text = T("Reset this page to default"), enabled = edited, callback = function()
                 A.set("dash_rows_" .. page.id, nil)
                 api.changed()
             end } }
         end
-        out[#out + 1] = { { text = T("+ Add a page"), enabled = #pages < A.DASH_MAX_PAGES, callback = function()
-            A.state.edit_page = A.addPage() or A.state.edit_page
-            api.changed()
-        end } }
         if back then
             out[#out + 1] = { { text = T("Back"), callback = function() api.close(); back() end } }
         end
@@ -1200,15 +1215,14 @@ function Dashboard.show_settings(ctx)
     local function show()
         S.open(ctx, A.NAME .. T(" dashboard"), function(api)
             local rows = {}
-            rows[#rows + 1] = { { text = T("Pages and cards") .. ELLIPSIS, callback = function()
+            rows[#rows + 1] = { { text = T("Dashboard pages") .. ELLIPSIS, callback = function()
                 api.close()
                 editPages(ctx, show)
             end } }
-            for _, r in ipairs(S.styleRows(api, ctx)) do rows[#rows + 1] = r end
-            rows[#rows + 1] = S.header(T("Margin around the page"))
-            rows[#rows + 1] = S.radio(api, { { "none", T("None") }, { "small", T("Small") }, { "medium", T("Medium") } },
-                MARGINS[A.get("dash_margin", "small")] and A.get("dash_margin", "small") or "small",
-                function(v) A.set("dash_margin", v ~= "small" and v or nil) end)
+            rows[#rows + 1] = { { text = T("Styles and colours") .. ELLIPSIS, callback = function()
+                api.close()
+                S.look(ctx, show)
+            end } }
             rows[#rows + 1] = { { text = T("Card settings") .. ELLIPSIS, callback = function()
                 api.close()
                 S.open(ctx, T("Card settings"), function(sub)
@@ -1235,17 +1249,13 @@ function Dashboard.show_settings(ctx)
                     return list
                 end)
             end } }
-            rows[#rows + 1] = { { text = T("Look and colours") .. ELLIPSIS, callback = function()
-                api.close()
-                S.look(ctx, show)
-            end } }
-            rows[#rows + 1] = { { text = T("Put the whole Dashboard back as it came") .. ELLIPSIS, callback = function()
+            rows[#rows + 1] = { { text = T("Reset to default") .. ELLIPSIS, callback = function()
                 api.close()
                 local UIManager = require("ui/uimanager")
                 local ConfirmBox = require("ui/widget/confirmbox")
                 UIManager:show(ConfirmBox:new{
-                    text = T("Put every page, tab and row of the Dashboard back as it came?\n\nPages you added are removed. Each card's own settings and the colours are kept."),
-                    ok_text = T("Put back"),
+                    text = T("Reset the Dashboard to default?\n\nEvery page, tab and row goes back to how it came, and pages you added are removed. Each card's own settings and the colours are kept."),
+                    ok_text = T("Reset"),
                     ok_callback = function()
                         A.resetDashboard()
                         S.reload(ctx)

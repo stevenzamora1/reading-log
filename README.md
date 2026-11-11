@@ -1,6 +1,6 @@
 # Reading Log
 
-**A reading dashboard for KOReader's home screens, [Simple UI](https://github.com/doctorhetfield-cmd/simpleui.koplugin) and [Bookshelf](https://github.com/AndyHazz/bookshelf.koplugin), made for colour e-ink.**
+**A reading dashboard for KOReader's home screens, [Simple UI](https://github.com/doctorhetfield-cmd/simpleui.koplugin), [Bookshelf](https://github.com/AndyHazz/bookshelf.koplugin) and [ZenOS](https://github.com/xZenLabs/zen-os), or full screen on its own, made for colour e-ink.**
 
 Activity rings, monthly and yearly charts, your longest reads, the time of
 day you read, a wall of every cover you finished this year, a book club
@@ -10,27 +10,101 @@ quote from your highlights, a cover calendar of every day you read, a
 control centre for your light and a device card for the battery, storage and
 memory, and five ornaments that hang on the wallpaper or stand on
 Bookshelf's shelf (the year's books, a streak flame, a letter board with
-your own words, today's pages, every page you've turned), and Lifetime
-pages, every page you've ever turned as a card for the Dashboard. That's 43 cards,
+your own words, today's pages, every page you've turned), Lifetime
+pages, a Pages goal, Finish speed and Decades. That's 46 cards,
 plus a reader panel under
 the reader's menu, a Dashboard that puts
 them together as tabbed pages (Today, Yearly, Monthly, Trends, Library and
 Calendar, and your own), and a Mini dashboard for the top of the home screen.
 
-One plugin works with both home screens: install it, and the cards show up in
-Simple UI's and in Bookshelf's module lists. Made on, and for, a Kobo Libra
-Colour.
+One plugin works with every home screen: install it, and the cards show up in
+Simple UI's and Bookshelf's module lists and as ZenOS widgets. Made on, and
+for, a Kobo Libra Colour.
 
 The ring designs and the idea of a reading dashboard come from
 [u/fishnoogz](https://www.reddit.com/user/fishnoogz/)'s Reddit post.
 
 <p align="center">
-  <img src="docs/images/today-cyber.png" width="32%" alt="Today page in the Cyber style">
-  <img src="docs/images/today-academia.png" width="32%" alt="Today page in the Dark Academia style">
-  <img src="docs/images/shelf-ornaments-cyber.png" width="32%" alt="Books this year and a letter board standing on Bookshelf's shelf">
+  <img src="docs/images/zenos-gothic.png" width="32%" alt="The Dashboard in the Gothic style on ZenOS">
+  <img src="docs/images/full-christmas.png" width="32%" alt="The full-screen Dashboard in the Christmas style">
+  <img src="docs/images/simpleui-forest.png" width="32%" alt="The Dashboard in the Forest style over a Simple UI wallpaper">
 </p>
 
-## New in 1.4
+## New in 1.5
+
+**Styles to download.** Tools > Reading Log > Styles and colours > **Get
+more styles…** lists the styles in
+[reading-log-styles](https://github.com/stevenzamora1/reading-log-styles):
+**Christmas**, **Gothic**, **Forest**, **Ocean**, **Space**, **Honey** and
+**Winter**. Each one redraws the rings, the days of the week, the goals, the
+progress bars, the Monthly challenge, the calendar, the book covers and the
+Dashboard's tabs, and brings its own colours. Tap one to download it; tap
+again to update or remove it.
+
+<p align="center">
+  <img src="docs/images/zenos-ocean.png" width="24%" alt="The Ocean style">
+  <img src="docs/images/zenos-space.png" width="24%" alt="The Space style">
+  <img src="docs/images/full-honey.png" width="24%" alt="The Honey style">
+  <img src="docs/images/zenos-winter.png" width="24%" alt="The Winter style">
+</p>
+
+**ZenOS.** Every card, the Mini dashboard and the Dashboard are widgets for
+[ZenOS](https://github.com/xZenLabs/zen-os)'s Home.
+
+**The Dashboard full screen**, on a screen of its own, with or without a
+home screen plugin: Tools > Reading Log > Open the dashboard, or a gesture.
+
+<p align="center">
+  <img src="docs/images/zenos-home-gothic.png" width="32%" alt="Today's timeline and a stacked Mini dashboard on ZenOS's Home">
+  <img src="docs/images/calendar-gothic.png" width="32%" alt="The Calendar page in the Gothic style">
+  <img src="docs/images/calendar-forest.png" width="32%" alt="The Calendar page in the Forest style">
+</p>
+
+**Three new cards.** **Pages goal**: pages this year, month or week against
+a goal of your own. **Finish speed**: how many days a book takes you, a dot
+per book. **Decades**: when the books in your library were published.
+
+<p align="center">
+  <img src="docs/images/new-cards-gothic.png" width="32%" alt="Decades, Finish speed, Lifetime pages and Pages goal in the Gothic style">
+  <img src="docs/images/new-cards-winter.png" width="32%" alt="Decades, Finish speed, Lifetime pages and Pages goal in the Winter style">
+  <img src="docs/images/calendar-winter.png" width="32%" alt="The Calendar page in the Winter style">
+</p>
+
+And more:
+
+- **The Mini dashboard can stack its cards**: the first on the left and up
+  to three on top of each other on the right (This week over the Monthly
+  challenge, say).
+- **The Yearly page goes back through the years**, like the Monthly page.
+- **What counts as finished is up to you**: marked finished, read to the
+  end, or either.
+- **Change a book's dates** when the start or finish date is wrong.
+- **Goals for one collection**: a Year goal or Pages goal for a TBR
+  collection, say.
+- **Quotes can open at the highlight.**
+- **Colours**: any style can go on White, Dark or Paper instead of its own
+  colours.
+- **Simpler menus**, and a faster Dashboard with a long reading history.
+- **Ukrainian**, by [advokatb](https://github.com/advokatb).
+
+The full list is in the [changelog](CHANGELOG.md).
+
+## Cards on their own
+
+The cards also work one by one, next to the home screen's own modules. On
+their own they take on the home screen's look, including its dark theme (and,
+in Bookshelf, any colours you give a card with its palette icon).
+
+<p align="center">
+  <img src="docs/images/cards-1.png" width="24%" alt="Cards in Bookshelf's full-screen view">
+  <img src="docs/images/home-1.png" width="24%" alt="Cards on Bookshelf's home screen">
+  <img src="docs/images/home-screen-cards.png" width="24%" alt="Cards on Simple UI's home screen">
+  <img src="docs/images/dashboard-trends.png" width="24%" alt="The Dashboard on a Simple UI screen">
+</p>
+
+## Earlier versions
+
+### New in 1.4
 
 **One plugin for Simple UI and Bookshelf**, so it installs and updates like
 any other KOReader plugin, with one set of settings for both.
@@ -76,20 +150,7 @@ And the Default style:
   <img src="docs/images/monthly.png" width="32%" alt="Monthly page">
 </p>
 
-## Cards on their own
-
-The cards also work one by one, next to the home screen's own modules. On
-their own they take on the home screen's look, including its dark theme (and,
-in Bookshelf, any colours you give a card with its palette icon).
-
-<p align="center">
-  <img src="docs/images/cards-1.png" width="24%" alt="Cards in Bookshelf's full-screen view">
-  <img src="docs/images/home-1.png" width="24%" alt="Cards on Bookshelf's home screen">
-  <img src="docs/images/home-screen-cards.png" width="24%" alt="Cards on Simple UI's home screen">
-  <img src="docs/images/dashboard-trends.png" width="24%" alt="The Dashboard on a Simple UI screen">
-</p>
-
-## Earlier versions
+### Before that
 
 New in 1.3: **Style: Cute** (hearts instead of rings, a flower for the
 Monthly challenge, a garden for the Book club, a jar of hearts for the Year
@@ -122,9 +183,11 @@ dashboard for the top of the home screen.
 
 ## What you need
 
-- [KOReader](https://koreader.rocks) with either home screen:
-  - [Simple UI](https://github.com/doctorhetfield-cmd/simpleui.koplugin) **2.7.5 or newer**, or
-  - [Bookshelf](https://github.com/AndyHazz/bookshelf.koplugin) **6.0 or newer** (it loads the cards from the plugin).
+- [KOReader](https://koreader.rocks). A home screen is optional:
+  - [Simple UI](https://github.com/doctorhetfield-cmd/simpleui.koplugin) **2.7.5 or newer**,
+  - [Bookshelf](https://github.com/AndyHazz/bookshelf.koplugin) **6.0 or newer** (it loads the cards from the plugin),
+  - [ZenOS](https://github.com/xZenLabs/zen-os) (or Zen UI), which shows the cards as Home widgets,
+  - or none: the Dashboard opens full screen on its own (see below).
 - KOReader's **Reading statistics** plugin switched on (it is by default).
   All the reading figures come from it.
 - A colour screen is optional. On a black-and-white screen the colours show
@@ -162,12 +225,24 @@ folder, so updates keep them.
 
 ## Updates
 
-KOReader menu > Tools > **Reading Log** > **Check for updates** looks for a
+KOReader menu > Tools > **Reading Log** > **About and updates** > **Check for updates** looks for a
 newer release here, shows what's new, and installs it when you say so
 (connect to Wi-Fi first, or KOReader will offer to). Restart KOReader
 afterwards. Turn on **Check for updates automatically** to have it look once a
 day when you're already online; it never installs anything without asking.
 The App Store plugin can update it too.
+
+## Styles to download
+
+Tools > Reading Log > **Styles and colours…** > **Get more styles…** shows
+the styles you can download: **Christmas**, **Gothic**, **Forest**,
+**Ocean**, **Space**, **Honey** and **Winter**. Tap one to
+download it; it then shows up in the Style list with Default, Cute, Cyber
+and Dark Academia. Open it again to update it or remove it. **Your
+styles…**, next to it, works without Wi-Fi: hide the built-in styles or
+delete downloaded ones from the device. The styles live in
+[reading-log-styles](https://github.com/stevenzamora1/reading-log-styles),
+which also explains how to make one.
 
 ## With Simple UI
 
@@ -185,9 +260,10 @@ Column Width to 50% (long-press > Column Width) to put two side by side.
    Fill the page.
 
 Long-press any card for its settings: **Content** (the card's own options),
-**Appearance** (card height, text size, card colour, Look and colours) and
+**Appearance** (card height, text size, card colour, Styles and colours) and
 **When tapped** (the card's own action, the reading calendar, reading
-progress, or any Simple UI Quick Action). Look and colours is also in
+progress, any Simple UI Quick Action, or any KOReader action from the same
+list as gestures). Styles and colours is also in
 Tools > Reading Log.
 
 With a Simple UI wallpaper on, the Dashboard follows its **Background
@@ -222,12 +298,53 @@ the daily minutes goal are its Reading goals settings, Quote of the day is
 the same daily quote as its own, and covers and book facts come from its
 library.
 
+## With ZenOS
+
+Every card, the Mini dashboard and the Dashboard are widgets for ZenOS's
+Home (and Zen UI's). They start switched off, like any widget that isn't
+Zen's own:
+
+1. Zen Settings > Home > **Widgets**, and turn on the `Reading Log · …` ones
+   you want. Zen shows only what fits on its Home.
+2. Long-press one of them for its settings, its **Text size**, and its
+   **Height on Home** (in tenths of the screen; most cards 2 to 4).
+
+**For the Dashboard alone on Home:** the Dashboard is tall, so Zen only has
+room for it once its own widgets are out of the way, and Zen won't let you
+turn off its last one. Do it in this order:
+
+1. Zen Settings > Home > **Widgets**: turn off every widget **except Zen's
+   Reading stats** (Reading Log's ones too).
+2. Turn on **`Reading Log · Dashboard`**. It starts at 9/10 of the screen,
+   so it fits next to Reading stats.
+3. Turn off **Reading stats**. Now the Dashboard is the only widget.
+4. Optional: long-press the Dashboard > **Height on Home** > **10/10** to
+   fill the whole Home.
+
+On the Dashboard widget, swipe left or right for the next or previous page.
+Books open through Zen, and Details opens Zen's book menu.
+
+## The full-screen dashboard
+
+The Dashboard also opens on a screen of its own, with no home screen
+plugin at all: **Tools > Reading Log > Open the dashboard**, or put
+**Reading Log dashboard** on a gesture (KOReader's gesture settings, under
+General). The same gesture closes it again.
+
+- Swipe left or right for the next or previous page, or tap the tabs.
+- Tap the X at the end of the tab bar, or swipe down, to close it.
+- Long-press a card for its settings, the Dashboard's settings, the text
+  size, or Close.
+
+It has its own text size, and the same pages, cards and settings as the
+Dashboard module everywhere else.
+
 ## The Dashboard
 
 Tap the tabs at the bottom to switch pages. The Dashboard's pages can be
-changed too: long-press it > **Pages and cards**. You can add pages of your
-own there (up to eight tabs), and **Put the whole Dashboard back as it came**
-in the Dashboard's settings undoes every change.
+changed too: long-press it > **Dashboard pages**. You can add pages of your
+own there (up to eight tabs), and **Reset to default** in the same menu
+undoes every change.
 
 | Page | What's on it |
 | --- | --- |
@@ -266,20 +383,25 @@ tab's list; hold a button to see what it does.
 
 ## The Mini dashboard
 
-For the top of the home screen: one row of up to three small cards. As it
+For the top of the home screen: up to four small cards. As it
 comes it shows the book you're reading, with a small row of today's rings
 under its progress (pages, minutes and streak), then the Control centre. In
-its settings, pick up to three (Reading and today's rings, Control centre,
+its settings, pick up to four (Reading and today's rings, Control centre,
 Continue reading, Activity rings, This week vs last, Week rings, Monthly
 challenge, Finish forecast, Year goal, Today's timeline, Random pick, Quote of
-the day, Library stats, Week in covers). It shows as many as fit, left to
-right.
+the day, Library stats, Week in covers). It shows as many as fit.
+
+With three cards or more, **With three cards or more** picks how they sit:
+**Side by side** in one row, **Stacked on the right** (the first card on the
+left, the others on top of each other beside it, like This week over a
+goal), or **Auto**, which stacks them when the Mini dashboard is tall
+enough.
 
 ## Languages
 
 Reading Log follows KOReader's interface language. It comes in English,
-Italian, Spanish, French and Brazilian Portuguese (also used for Portuguese
-from Portugal): pick the language in KOReader's language menu and restart,
+Italian, Spanish, French, Ukrainian and Brazilian Portuguese (also used for
+Portuguese from Portugal): pick the language in KOReader's language menu and restart,
 and the cards, Dashboard and settings follow. Other languages fall back to
 English. See [Translating Reading Log](docs/TRANSLATING.md) to add another
 language.
@@ -296,7 +418,7 @@ cards on each page, their order, side by side or full width, and their
 height, add pages of your own, change the order of the tabs, and put it all
 back as it came.
 
-**Style: Cute** (in the Dashboard's settings, or Look and colours on any
+**Style: Cute** (in the Dashboard's settings, or Styles and colours on any
 card) turns on every cute look at once: hearts for the rings, a flower for
 the Monthly challenge, a garden for the Book club, a jar of hearts for the
 Year goal, notebook paper for the quote cards, polaroids for the cover
@@ -335,7 +457,8 @@ theme, after Cyber or Dark Academia).
 | **Activity rings** | Today's reading as three rings: pages against your daily goal, minutes against your daily goal, and your streak. Or as hearts (see below). | Reading progress |
 | **Week rings** | A pages ring and a minutes ring for each day this week, with your daily averages for the week. | Reading calendar |
 | **This week** | A bar for each day this week, in pages or minutes. | Reading calendar |
-| **Year goal** | Books finished this year against your goal, and whether you're on track. Shares its goal with the home screen's Reading goals. Or a jar that fills with a heart per book, shards, a terminal syncing the books you finished, or a globe. | |
+| **Year goal** | Books finished this year against your goal, and whether you're on track. Shares its goal with the home screen's Reading goals. Or pick a collection in its settings: then only that collection's books count, against the card's own number (the whole collection to start with). Or a jar that fills with a heart per book, shards, a terminal syncing the books you finished, or a globe. | |
+| **Pages goal** | Pages read this year (or this month, or this week) against a goal you set on the card, how far ahead or behind you are, and how many pages a day it takes to get there. Pick a collection in its settings to count only the pages read in its books. With a downloaded style, its year-goal picture fills with your pages. | |
 | **Book club** | This month's picks from your book club collection with your progress on each, days left in the month, and how much of the club's list you've read. The Garden look grows each progress bar as a stem and puts a dragonfly on finished covers. | A book opens it |
 | **Today's timeline** | When you read today: each sitting as a block along the day, and a list of them with the time, the book and how long. | Reading calendar |
 
@@ -375,6 +498,7 @@ style, picked in its settings or all at once with the style.
 | --- | --- | --- |
 | **Time read by month** | Hours read in each month this year, as bars, with the year's total. | A month lists the books you finished in it |
 | **Longest reads (year)** | The year's books that took you longest, by reading time or by days. | A book opens its details |
+| **Finish speed** | How many days the books you finished took, first page to last: a dot for each book on a scale from a day to a year (in its cover's colour), the typical book's days as a big number and a dashed line, how many you finished in a week or less, and the fastest and slowest. This year, or the last 12 months. | The fastest or slowest opens its details |
 | **Books and pages** | Books finished and pages read each month this year, as two lines, with the year's totals. | A month lists its books |
 | **Year in covers** | Every cover you finished this year as a wall, in the order you finished them, with the months marked. Shows the newest if they don't all fit. | A cover opens that book's details |
 | **Top genres** | The genres you finished most this year. | |
@@ -397,8 +521,9 @@ style, picked in its settings or all at once with the style.
 | --- | --- | --- |
 | **Library stats** | How many books you own, have read, are reading, have on hold and haven't started, as figures and one bar. | |
 | **Most-read authors** | Your top authors by books finished or by hours read, with a bar for each. | |
+| **Decades** | When the books in your library were published: a dot for each book on a line of years (in its cover's colour), the typical year as a big number and a dashed line, the decade with the most books, and the oldest and newest. Every book or only finished ones, and optionally one collection. The years are read from the book files the first time (EPUB, FB2, CBZ, MOBI/AZW3), in the background; with Bookshelf 6.4 or newer, a date you set in Bookshelf wins. | The oldest or newest opens its details |
 | **Random pick** | A book you haven't started, new every day, week or month, or only when you tap Another. Pick from the whole library or one collection, and only the genres or authors you choose. In a series it only offers the next book: six books into eight, it picks the seventh, never the eighth. | Open opens the book, Another picks again |
-| **Quote of the day** | One of your own highlights, with the book it came from (with Bookshelf, the day starts on the same quote as its own Quote of the day). | Opens the book; Another picks a different one at random, never more than two in a row from one book |
+| **Quote of the day** | One of your own highlights, with the book it came from (with Bookshelf, the day starts on the same quote as its own Quote of the day). | Opens the book where you left off, or at the highlight itself (its settings: Tapping a quote opens); Another picks a different one at random, never more than two in a row from one book |
 | **Quote of the day 2, 3 and 4** | More random highlights, one per card. Each picks its own, never the same one as your other quote cards. | Opens the book; Another shows a different one |
 
 ### Calendar
@@ -416,14 +541,14 @@ style, picked in its settings or all at once with the style.
 | **Device** | The battery large, then storage free, the memory KOReader is using, Wi-Fi and the front light, each with a level bar. Checked once a minute and redrawn only when something changes. Or as a heart (Cute), a system monitor (Cyber) or a candle and ledger (Dark Academia). | Battery statistics |
 
 To put the Control centre (or This week vs last) on a Dashboard page:
-long-press the Dashboard > Module settings > **Pages and cards**, pick the
+long-press the Dashboard > Module settings > **Dashboard pages**, pick the
 page, tap **+ Add a row**, and pick the card.
 
 ### Mini dashboard
 
 | Module | What it does | Tap |
 | --- | --- | --- |
-| **Mini dashboard** | One row of small cards for the top of the home screen: the book you're reading with today's rings, and the Control centre, as it comes, or up to three you pick. | Each small card does what its big one does |
+| **Mini dashboard** | Small cards for the top of the home screen: the book you're reading with today's rings, and the Control centre, as it comes, or up to four you pick, side by side or stacked on the right. | Each small card does what its big one does |
 
 ### Shelves and goals
 
@@ -431,6 +556,21 @@ page, tap **+ Add a row**, and pick the card.
 | --- | --- | --- |
 | **TBR shelf** | A row of covers from one collection (your TBR, say), labelled with your progress or as digital or hardcopy. | A cover opens the book |
 | **Finish by** | One book against a date, such as a library loan: days left, pages a day needed, and whether you're on pace. | Opens the book |
+
+## What counts as finished
+
+Tools > Reading Log > **Your reading** > **A book counts as finished when** (also in the
+settings of the cards that count finished books):
+
+- **Marked finished** (the default): the way your home screen counts
+  finished books, on the day the book was marked finished. Year goal and
+  Simple UI's or Bookshelf's own goals then agree.
+- **Read to the end**: KOReader's reading statistics show you reached the
+  last 1% of the book, on the day you got there, whether or not you marked
+  it. The statistics keep a row for every page you read (which page, out of
+  how many, and when), so the day is the first time you read a page past
+  99% since you last began the book.
+- **Either**: one or the other.
 
 ## Make it yours
 
@@ -443,11 +583,13 @@ Long-press any card for its settings (in Bookshelf, **Module settings**):
   action chooser. Buttons on a card keep their own job.
 - **Card colour:** plain or tinted, and which of the two accent colours leads.
 - **Dashboard pages:** add your own pages, rename or hide any page, move the
-  tabs, or put the whole Dashboard back as it came.
-- **Look and colours** (all cards at once): theme (White, Dark, Paper, Cyber
-  or Dark Academia), Style (Default, Cute, Cyber or Dark Academia), two accent
-  colours from sixteen, how cards look on their own (matching the home screen
-  or framed in the theme), the day the week starts on, and Diagnostics.
+  tabs, or reset the whole Dashboard to default.
+- **Styles and colours** (all cards at once): the Style (Default, Cute,
+  Cyber, Dark Academia, or one you downloaded), its Colours (the style's own
+  when it has some, or White, Dark or Paper), two accent colours from
+  sixteen, how cards look on their own (matching the home screen or framed
+  in the colours, with Default or Cute). The day the week starts on
+  is in Tools > Reading Log > **Your reading**.
 
 Times follow KOReader's own 12- or 24-hour clock (Settings > Time and date).
 
@@ -456,9 +598,9 @@ read are worked out, and setting up the book club.
 
 ## Troubleshooting
 
-- KOReader menu > Tools > Reading Log > **About** shows the version and
+- KOReader menu > Tools > Reading Log > **About and updates** > **About** shows the version and
   whether Simple UI and Bookshelf were found.
-- Look and colours > **Diagnostics** shows the versions, theme and screen.
+- Tools > Reading Log > **About and updates** > **Diagnostics** shows the versions, theme and screen.
 - No cards in Bookshelf? It needs version 6.0 or newer, and an old copy in
   `settings/bookshelf/micromodules` takes their place until it is removed.
 - Problems are logged to `crash.log` with `[readinglog]`.

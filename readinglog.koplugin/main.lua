@@ -12,7 +12,9 @@ and Bookshelf, from one plugin.
 
 Both use the same code (readinglog/) and the same settings file
 (settings/readinglog.lua). This file also adds Reading Log to KOReader's
-Tools menu: Look and colours (with Simple UI), updates, and About.
+Tools menu: Open the dashboard, Styles and colours, Your reading (what counts
+as finished, the week, a book's dates), the reader panel, and About and
+updates.
 ]]
 
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -159,6 +161,27 @@ local function oldCopies()
     return { files = files, kit_dir = kit_dir, dir = dir }
 end
 
+-- The same "._" twins a Mac leaves next to the old copy's files (or left
+-- behind after them, when the real files were deleted in Finder): Bookshelf
+-- tries each as a card and logs "micro-module failed to load ... unexpected
+-- symbol" for every one, each time its module list is built. Only the twins
+-- of Reading Log's own files (._alm_*.lua, ._almanac) are removed.
+local function removeOldTwins()
+    local lfs_ok, lfs = pcall(require, "libs/libkoreader-lfs")
+    local dir = oldCopyDir()
+    if not (lfs_ok and dir and lfs.attributes(dir, "mode") == "directory") then return end
+    local removed = 0
+    for name in lfs.dir(dir) do
+        if name:match("^%._alm_.+%.lua$") or name == "._almanac" then
+            if os.remove(dir .. "/" .. name) then removed = removed + 1 end
+        end
+    end
+    if removed > 0 then
+        logger.info("[readinglog] removed", removed, "hidden ._ files a Mac left in", dir)
+    end
+end
+pcall(removeOldTwins)
+
 local function removeTree(path, lfs)
     if lfs.attributes(path, "mode") == "directory" then
         for name in lfs.dir(path) do
@@ -297,16 +320,17 @@ local function panelMenu()
             separator = true,
         },
     }
+    local parts = {}
     for pi = 1, #RP.PARTS do
         local p = RP.PARTS[pi]
-        items[#items + 1] = {
+        parts[#parts + 1] = {
             text = p.label,
             enabled_func = on,
             checked_func = function() return RP.partOn(p.key) end,
             callback = function() RP.setPart(p.key, not RP.partOn(p.key)) end,
         }
     end
-    items[#items].separator = true
+    items[#items + 1] = { text = _("What it shows"), enabled_func = on, sub_item_table = parts }
 
     local function buttonMenu(i)
         local list = RP.editableButtons()
@@ -424,7 +448,7 @@ local function panelMenu()
             { text = _("Action"), sub_item_table = actions },
             { text = _("Icon"), sub_item_table = icons },
             {
-                text = _("Put this button back as it came"),
+                text = _("Reset this button to default"),
                 keep_menu_open = true,
                 callback = function(touchmenu_instance)
                     RP.resetButton(i)
@@ -438,25 +462,33 @@ local function panelMenu()
         text_func = function() return fmt("Buttons: %1", RP.buttonCount()) end,
         enabled_func = on,
         sub_item_table_func = function()
+            -- how many (a number to pick), then just the buttons in use
             local out = {}
-            local counts = {}
-            for n = 0, RP.MAX_BUTTONS do
-                counts[#counts + 1] = {
-                    text = tostring(n),
-                    radio = true,
-                    checked_func = function() return RP.buttonCount() == n end,
-                    callback = function() RP.setButtonCount(n) end,
-                }
-            end
-            out[#out + 1] = { text = _("How many"), sub_item_table = counts, separator = true }
-            for i = 1, RP.MAX_BUTTONS do
+            out[#out + 1] = {
+                text_func = function() return fmt("How many: %1", RP.buttonCount()) end,
+                keep_menu_open = true,
+                separator = true,
+                callback = function(touchmenu_instance)
+                    local SpinWidget = require("ui/widget/spinwidget")
+                    UIManager:show(SpinWidget:new{
+                        title_text = _("How many buttons"),
+                        value = RP.buttonCount(), value_min = 0, value_max = RP.MAX_BUTTONS, value_step = 1,
+                        ok_text = _("Set"),
+                        callback = function(spin)
+                            RP.setButtonCount(spin.value)
+                            -- back up a level: opening Buttons again lists the new number
+                            if touchmenu_instance then touchmenu_instance:backToUpperMenu() end
+                        end,
+                    })
+                end,
+            }
+            for i = 1, RP.buttonCount() do
                 out[#out + 1] = {
                     text_func = function()
                         local e = RP.editableButtons()[i]
                         local mark = e.image and A.S.ICONS.image or (e.icon or "")
                         return i .. ".  " .. mark .. "  " .. RP.buttonName(e)
                     end,
-                    enabled_func = function() return i <= RP.buttonCount() end,
                     sub_item_table_func = function() return buttonMenu(i) end,
                 }
             end
@@ -488,6 +520,60 @@ local function updater()
 end
 local auto_checked = false
 
+-- ─── styles ──────────────────────────────────────────────────────────────────
+
+-- The cards' code for Styles and colours...: Bookshelf's copy
+-- when its cards are loaded, else Simple UI's, else Bookshelf's, loaded the
+-- way its cards load it (so they share it).
+local function stylesKit()
+    local A = package.loaded["almanac_kit"]
+    if A then return A end
+    if simpleUIThere() then return kit() end
+    local bs = bookshelfVersion()
+    -- neither: the full-screen dashboard's (and ZenOS's) copy
+    if not bs then return kit() end
+    if majorOf(bs) < 6 then return nil end
+    local ok, r = pcall(function()
+        return assert(loadfile(DIR .. "/readinglog/init.lua"))("bookshelf")
+    end)
+    if not ok or type(r) ~= "table" then
+        logger.err("[readinglog] could not load the cards:", r)
+        return nil
+    end
+    package.loaded["almanac_kit"] = r
+    return r
+end
+
+-- ─── the full-screen dashboard and ZenOS ─────────────────────────────────────
+
+local function openDashboard()
+    local A = kit()
+    if A and A.openDashboard then
+        local ok, err = pcall(A.openDashboard)
+        if not ok then logger.warn("[readinglog] could not open the dashboard:", err) end
+    end
+end
+
+local function toggleDashboard()
+    local A = kit()
+    if A and A.dashboardOpen and A.dashboardOpen() then A.closeDashboard() else openDashboard() end
+end
+
+-- Hand every card to ZenOS (or Zen UI), when it is there.
+local function registerZen()
+    if not (rawget(_G, "__ZENOS_REGISTER_HOME_ITEM") or rawget(_G, "__ZEN_UI_REGISTER_HOME_ITEM")) then return false end
+    local A = kit()
+    if not (A and A.zenRegister) then return false end
+    local ok, r = pcall(A.zenRegister)
+    if not ok then logger.warn("[readinglog] could not add the ZenOS widgets:", r) end
+    return ok and r
+end
+
+local function zenThere()
+    return rawget(_G, "__ZENOS_REGISTER_HOME_ITEM") ~= nil or rawget(_G, "__ZEN_UI_REGISTER_HOME_ITEM") ~= nil
+end
+
+
 -- ─── the plugin ──────────────────────────────────────────────────────────────
 
 local ReadingLog = WidgetContainer:extend{
@@ -497,15 +583,22 @@ local ReadingLog = WidgetContainer:extend{
 
 function ReadingLog:init()
     local in_book = self.ui and self.ui.document
+    self:onDispatcherRegisterActions()
+    -- The gesture reaches the plugin even with another screen in front (Simple
+    -- UI's Home, a dialog): KOReader hands the events nobody in front took to
+    -- the "active widgets" of the windows below.
+    if self.ui and type(self.ui.active_widgets) == "table" then
+        table.insert(self.ui.active_widgets, self)
+    end
     if not register() then
         -- Simple UI may not be ready yet: try again once everything has started.
+        -- (Without Simple UI or Bookshelf, the full-screen dashboard and the
+        -- ZenOS widgets still work.)
         UIManager:nextTick(function()
             if register() or warned or in_book then return end
             local bs = bookshelfVersion()
             local text
-            if not bs then
-                text = _("Reading Log needs Simple UI or Bookshelf.")
-            elseif majorOf(bs) < 6 then
+            if bs and majorOf(bs) < 6 then
                 text = _("Reading Log's cards need Bookshelf 6.0 or newer.")
             end
             if text then
@@ -523,6 +616,9 @@ function ReadingLog:init()
         self.ui.menu:registerToMainMenu(self)
     end
     installPanelHook()
+    -- ZenOS loads after Reading Log and says when it is ready (onZenOSReady);
+    -- this catches one that was already there
+    if zenThere() then registerZen() end
     if not auto_checked then
         auto_checked = true
         local U = updater()
@@ -530,69 +626,152 @@ function ReadingLog:init()
     end
 end
 
+function ReadingLog:onDispatcherRegisterActions()
+    local ok, Dispatcher = pcall(require, "dispatcher")
+    if not (ok and Dispatcher and Dispatcher.registerAction) then return end
+    pcall(Dispatcher.registerAction, Dispatcher, "readinglog_dashboard", {
+        category = "none", event = "ReadingLogDashboard", title = _("Reading Log dashboard"), general = true,
+    })
+end
+
+function ReadingLog:onReadingLogDashboard()
+    toggleDashboard()
+    return true
+end
+
+-- A quote card asked to open its book at the highlight (D.openAtHighlight):
+-- once the book is open, turn to it. The place you had reached stays on the
+-- back stack, so KOReader's Back (or Go back to previous location) returns
+-- you there.
+function ReadingLog:onReaderReady()
+    local j = package.loaded["readinglog_goto"]
+    local ui = self.ui
+    local file = ui and ui.document and ui.document.file
+    if type(j) ~= "table" or not file then return end
+    package.loaded["readinglog_goto"] = nil
+    if j.fp ~= file or os.time() - (j.at or 0) > 120 then return end
+    UIManager:nextTick(function()
+        local ok, err = pcall(function()
+            local Event = require("ui/event")
+            if ui.link and ui.link.addCurrentLocationToStack then ui.link:addCurrentLocationToStack() end
+            if ui.rolling and type(j.page) == "string" then
+                ui:handleEvent(Event:new("GotoXPointer", j.page, type(j.pos0) == "string" and j.pos0 or j.page))
+            elseif tonumber(j.page) then
+                ui:handleEvent(Event:new("GotoPage", tonumber(j.page)))
+            end
+        end)
+        if not ok then logger.warn("[readinglog] could not turn to the highlight:", err) end
+    end)
+end
+
+function ReadingLog:onZenOSReady() registerZen() end
+function ReadingLog:onZenUIReady() registerZen() end
+
 function ReadingLog:addToMainMenu(menu_items)
     local items = {}
-    -- Look and colours from here only with Simple UI (with Bookshelf it is in
-    -- every card's long-press Module settings)
-    if simpleUIThere() then
-        items[#items + 1] = {
-            text = _("Look and colours…"),
-            enabled_func = function() return kit() ~= nil end,
-            callback = function()
-                local A = kit()
-                if A then A.S.look(nil) end
+    items[#items + 1] = {
+        text = _("Open the dashboard"),
+        enabled_func = function() return kit() ~= nil end,
+        callback = function() openDashboard() end,
+        help_text = _("The dashboard on a screen of its own. Swipe left or right for the next page, swipe down to close it, long-press a card for its settings. It can also go on a gesture: Reading Log dashboard, under General."),
+        separator = true,
+    }
+    -- A setting both apps share (Simple UI's and Bookshelf's cards): set it,
+    -- then have both count and draw again
+    local function anyKit() return package.loaded["readinglog_kit"] or package.loaded["almanac_kit"] or kit() end
+    local function getShared(key, default)
+        local A = anyKit()
+        return A and A.get(key, default) or default
+    end
+    local function setShared(key, v)
+        local A = anyKit()
+        if not A then return end
+        A.set(key, v)
+        for _, k in ipairs({ "readinglog_kit", "almanac_kit" }) do
+            local K = package.loaded[k]
+            if type(K) == "table" and K.D then
+                pcall(K.D.invalidate)
+                pcall(K.host.redrawAll)
+            end
+        end
+    end
+    local function radio(key, v, label, default)
+        return {
+            text = label, radio = true,
+            checked_func = function()
+                local cur = getShared(key, default)
+                return tostring(cur) == tostring(v)
             end,
+            callback = function() setShared(key, v ~= default and v or nil) end,
         }
     end
+
+    -- Styles and colours: the style, its accents, and the styles to download
+    items[#items + 1] = {
+        text = _("Styles and colours") .. "\xE2\x80\xA6",
+        enabled_func = function() return stylesKit() ~= nil end,
+        callback = function()
+            local A = stylesKit()
+            if A then A.S.look(nil, nil, { tools = true }) end
+        end,
+    }
+
+    -- Your reading: what counts, the dates, the week
+    items[#items + 1] = {
+        text = _("Your reading"),
+        sub_item_table_func = function()
+            local finished = getShared("finished_by", "marked")
+            if finished ~= "read" and finished ~= "either" then finished = "marked" end
+            return {
+                {
+                    text = _("A book counts as finished when"),
+                    sub_item_table = {
+                        radio("finished_by", "marked", _("Marked finished"), "marked"),
+                        radio("finished_by", "read", _("Read to the end"), "marked"),
+                        radio("finished_by", "either", _("Either"), "marked"),
+                    },
+                    help_text = _("Marked finished: the way your home screen counts finished books, on the day it was marked. Read to the end: the reading statistics show you reached the last 1% of the book, on the day you got there, marked or not. Either: one or the other."),
+                },
+                {
+                    text = _("Week starts on"),
+                    sub_item_table = {
+                        radio("week_start", 0, _("Follow KOReader"), 0),
+                        radio("week_start", 2, _("Monday"), 0),
+                        radio("week_start", 1, _("Sunday"), 0),
+                    },
+                },
+                {
+                    text = _("Change a book's dates") .. "\xE2\x80\xA6",
+                    help_text = _("When you started a book and when you finished it, for when the reading statistics or your home screen have them wrong. Every card uses the dates you set here."),
+                    keep_menu_open = true,
+                    callback = function()
+                        local A = anyKit()
+                        if A and A.S and A.S.pickBookForDates then A.S.pickBookForDates(nil) end
+                    end,
+                },
+            }
+        end,
+    }
     items[#items + 1] = {
         text = _("Reader panel"),
         sub_item_table_func = panelMenu,
         separator = true,
     }
-    items[#items + 1] = {
-        text_func = function()
-            local U = updater()
-            local v = U and U.found()
-            return v and fmt("Update available: %1", v) or _("Check for updates")
-        end,
-        enabled_func = function() return updater() ~= nil end,
-        keep_menu_open = true,
-        callback = function()
-            local U = updater()
-            if U then U.check() end
-        end,
-    }
-    items[#items + 1] = {
-        text = _("Check for updates automatically"),
-        help_text = _("Once a day at most, when you're already online. A new version is mentioned, never installed without asking."),
-        checked_func = function()
-            local U = updater()
-            return U and U.autoEnabled() or false
-        end,
-        enabled_func = function() return updater() ~= nil end,
-        keep_menu_open = true,
-        callback = function()
-            local U = updater()
-            if U then U.setAuto(not U.autoEnabled()) end
-        end,
-        separator = true,
-    }
-    items[#items + 1] = {
-        text = _("About"),
-        keep_menu_open = true,
-        callback = function()
-            local meta_ok, meta = pcall(dofile, DIR .. "/_meta.lua")
-            local version = meta_ok and type(meta) == "table" and meta.version or "?"
-            local sui = simpleUIThere()
-            local sui_v
-            if sui then
-                local A = kit()
-                sui_v = A and A.host.version() or _("found")
-            end
-            local bs = bookshelfVersion()
-            local InfoMessage = require("ui/widget/infomessage")
-            UIManager:show(InfoMessage:new{
-                text = fmt([[Reading Log %1
+
+    -- About and updates
+    local function about()
+        local meta_ok, meta = pcall(dofile, DIR .. "/_meta.lua")
+        local version = meta_ok and type(meta) == "table" and meta.version or "?"
+        local sui = simpleUIThere()
+        local sui_v
+        if sui then
+            local A = kit()
+            sui_v = A and A.host.version() or _("found")
+        end
+        local bs = bookshelfVersion()
+        local InfoMessage = require("ui/widget/infomessage")
+        UIManager:show(InfoMessage:new{
+            text = fmt([[Reading Log %1
 
 Simple UI: %2
 Bookshelf: %3
@@ -601,14 +780,64 @@ With Simple UI: Simple UI Settings > Home Screen > Layout Editor (or Extra Custo
 
 With Bookshelf (6.0 or newer): open its layout editor, tap + Add and pick the Reading Log cards.
 
+With ZenOS: Zen Settings > Home > Widgets, and turn on the Reading Log ones.
+
+On its own: Tools > Reading Log > Open the dashboard, or put "Reading Log dashboard" on a gesture.
+
 Long-press a card for its settings.
 
 Ring designs and the dashboard idea: u/fishnoogz on Reddit.]],
-                    version,
-                    sui_v or _("not found"),
-                    bs or _("not found")),
-            })
+                version,
+                sui_v or _("not found"),
+                bs or _("not found")),
+        })
+    end
+    items[#items + 1] = {
+        text_func = function()
+            local U = updater()
+            local v = U and U.found()
+            return v and fmt("About and updates (%1 is out)", v) or _("About and updates")
         end,
+        sub_item_table = {
+            {
+                text_func = function()
+                    local U = updater()
+                    local v = U and U.found()
+                    return v and fmt("Update available: %1", v) or _("Check for updates")
+                end,
+                enabled_func = function() return updater() ~= nil end,
+                keep_menu_open = true,
+                callback = function()
+                    local U = updater()
+                    if U then U.check() end
+                end,
+            },
+            {
+                text = _("Check for updates automatically"),
+                help_text = _("Once a day at most, when you're already online. A new version is mentioned, never installed without asking."),
+                checked_func = function()
+                    local U = updater()
+                    return U and U.autoEnabled() or false
+                end,
+                enabled_func = function() return updater() ~= nil end,
+                keep_menu_open = true,
+                callback = function()
+                    local U = updater()
+                    if U then U.setAuto(not U.autoEnabled()) end
+                end,
+                separator = true,
+            },
+            {
+                text = _("Diagnostics") .. "\xE2\x80\xA6",
+                enabled_func = function() return kit() ~= nil end,
+                keep_menu_open = true,
+                callback = function()
+                    local A = kit()
+                    if A and A.S.diagnostics then A.S.diagnostics(nil) end
+                end,
+            },
+            { text = _("About"), keep_menu_open = true, callback = about },
+        },
     }
     menu_items.readinglog = {
         text = _("Reading Log"),

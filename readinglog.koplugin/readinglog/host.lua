@@ -589,6 +589,42 @@ local function bookHighlights(fp)
     return list, title, author
 end
 
+--- Where a highlight is in its book, found by its text: { page, pos0 }
+--- (an xpointer for an EPUB and the like, a page number for a PDF), or nil.
+function H.highlightPos(fp, text)
+    local DocSettings = try("docsettings")
+    if not (DocSettings and type(text) == "string") then return nil end
+    local ok, ds = pcall(DocSettings.open, DocSettings, fp)
+    if not (ok and ds) then return nil end
+    local function norm(t)
+        if type(t) ~= "string" then return nil end
+        return (t:gsub("%s+", " "):match("^%s*(.-)%s*$")):sub(1, 200)
+    end
+    local want = norm(text)
+    local ann = ds:readSetting("annotations")
+    if type(ann) == "table" and #ann > 0 then
+        for _, a in ipairs(ann) do
+            if type(a) == "table" and a.drawer and norm(a.text) == want then
+                return { page = a.page or a.pos0 or a.pageno, pos0 = a.pos0 }
+            end
+        end
+        return nil
+    end
+    local hl = ds:readSetting("highlight")
+    if type(hl) == "table" then
+        for page, list in pairs(hl) do
+            if type(list) == "table" then
+                for _, h in ipairs(list) do
+                    if type(h) == "table" and norm(h.text) == want then
+                        return { page = type(h.pos0) == "string" and h.pos0 or tonumber(page), pos0 = h.pos0 }
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
 -- { { fp, n } } for every book in the history with highlights, by file.
 local function highlightCounts()
     local RH = try("readhistory")
@@ -910,7 +946,15 @@ H.KIND = "simpleui"
 -- The Simple UI screen ctx a card ctx belongs to (nil in settings menus).
 local function sui(ctx) return type(ctx) == "table" and ctx.sui or nil end
 
+-- A card in a window of Reading Log's own: what that window does for books.
+local function own(ctx, what)
+    local o = type(ctx) == "table" and ctx.own
+    return type(o) == "table" and type(o[what]) == "function" and o[what] or nil
+end
+
 function H.openBook(ctx, fp)
+    local fn = own(ctx, "openBook")
+    if fn and pcall(fn, fp) then return end
     local s = sui(ctx)
     if s and type(s.open_fn) == "function" then
         local ok = pcall(s.open_fn, fp)
@@ -920,6 +964,8 @@ function H.openBook(ctx, fp)
 end
 
 function H.showDetails(ctx, fp)
+    local fn = own(ctx, "showDetails")
+    if fn and pcall(fn, fp) then return end
     local s = sui(ctx)
     if s and type(s.hold_fn) == "function" then
         local ok = pcall(s.hold_fn, fp, ctx.mod_id)
@@ -1012,6 +1058,8 @@ end
 
 --- Redraw every open Simple UI screen (a theme or accent changed).
 function H.redrawAll()
+    -- Reading Log's own windows (ownscreen.lua) first
+    if A.redrawOwn then pcall(A.redrawOwn) end
     local SE = engine()
     if SE and SE.refreshAllLiveImmediate then
         if pcall(SE.refreshAllLiveImmediate, true) then return end
@@ -1027,6 +1075,13 @@ end
 function H.repaint(ctx, o)
     o = o or {}
     if type(ctx) ~= "table" then return H.redrawAll() end
+    -- a card in a window of Reading Log's own (the full-screen dashboard, a
+    -- Zen OS widget): it redraws itself
+    if type(ctx.own) == "table" and type(ctx.own.repaint) == "function" then
+        local ok, err = pcall(ctx.own.repaint, o)
+        if not ok then A.log("redraw failed:", err) end
+        return
+    end
     if ctx.menu_refresh then
         pcall(ctx.menu_refresh)
         return

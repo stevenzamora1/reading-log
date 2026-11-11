@@ -83,7 +83,7 @@ end
 -- inset the text by.
 local function platePad(px) return px(26), px(18) end
 local function plate(c, x, y, w, h, px)
-    local bg, fg, _, accent = A.dashPage()
+    local bg, fg, _, accent = A.plateColours()
     local r = A.THEMES[A.themeId()].square and 0 or max(6, floor(min(h * 0.3, px(32))))
     local CYT = A.cutTheme()
     if CYT then
@@ -130,6 +130,15 @@ function A.viewMonth()
     local t = os.date("*t")
     local vt = os.date("*t", os.time{ year = t.year, month = t.month + off, day = 1, hour = 12 })
     return vt.year, vt.month, off == 0
+end
+
+-- The year the Yearly cards show: this one, or one the reader stepped back
+-- to with the arrows on the Yearly page (A.state.year_offset, 0 to -10).
+-- Returns the year, and whether it is this one.
+function A.viewYear()
+    local off = A.clamp(floor(tonumber(A.state.year_offset) or 0), -(D.BACK_YEARS or 10), 0)
+    local y = tonumber(os.date("%Y")) + off
+    return y, off == 0
 end
 
 -- "September", or "September 2025" for a month of another year.
@@ -182,6 +191,7 @@ function P.banner.heading(env)
     local c, fg, accent, muted, accent2
     if env.nested then
         local page_bg, page_fg, page_dark, page_accent = A.dashPage()
+        if env.see then page_bg, page_fg, page_dark, page_accent = A.plateColours() end
         fg, accent = page_fg, page_accent
         c = A.canvas{ w = w, h = h, plain = true }
         muted = A.mix(page_bg, page_fg, 0.72)
@@ -706,7 +716,8 @@ function P.continue.build(env)
     local gl = scrap and gardenLook(tone) or nil
     local CY = not scrap and cyLook("continue_look", "hud")
     local AC = not scrap and not CY and acLook("continue_look", "framed")
-    local bar_h = scrap and max(px(20), px(36)) or CY and max(6, px(16)) or AC and px(58) or max(4, px(10))
+    local bar_h = scrap and max(px(20), px(36)) or CY and max(6, px(16)) or AC and px(58)
+        or (A.packHas and A.packHas("bar")) and max(8, px(18)) or max(5, px(12))
     local function drawCover(x, y, cw, ch)
         if scrap then
             scrapCover(c, x, y, cw, ch, book, px, scrap)
@@ -723,6 +734,10 @@ function P.continue.build(env)
             CY.cover(c, book.fp, x, y, cw, ch, { title = book.title })
         else
             c:cover(book.fp, x, y, cw, ch, { title = book.title, edge = edge })
+            -- a downloaded style can dress it (stylepacks.lua)
+            if A.packHas and A.packHas("bookCover") then
+                A.packCall("bookCover", c, x, y, cw, ch, tone, { pct = A.clamp(book.pct or 0, 0, 1) })
+            end
         end
     end
     -- how long this book has been on the go, from the first session the
@@ -755,6 +770,8 @@ function P.continue.build(env)
             CY.segbar(c, x, y_bar, width, bar_h, A.clamp(book.pct, 0, 1), max(10, floor(width / px(26))), tone.btn, tone.track)
         elseif AC then
             AC.penBar(c, x, y_bar, width, bar_h, A.clamp(book.pct, 0, 1), tone)
+        elseif A.packBar and A.packBar(c, x, y_bar, width, bar_h, A.clamp(book.pct, 0, 1), tone, tone.btn) then
+            -- a downloaded style's own bar
         else
             c:rrect(x, y_bar, width, bar_h, bar_h / 2, tone.track)
             c:rrect(x, y_bar, max(bar_h, round(width * A.clamp(book.pct, 0, 1))), bar_h, bar_h / 2, tone.btn, tone.track)
@@ -952,6 +969,8 @@ A.segs = segs
 
 -- A ring, or its segmented form when that shape is chosen.
 local function ringOf(c, cx, cy, R, t, frac, track, fill)
+    -- a downloaded style's own ring (stylepacks.lua)
+    if A.packRing and A.get("ring_shape", "rings") == "rings" and A.packRing(c, cx, cy, R, t, frac, track, fill) then return end
     local CY = segs() and A.cyber()
     if CY then return CY.segring(c, cx, cy, R, t, frac, track, fill) end
     local shape = A.get("ring_shape", "rings")
@@ -1074,12 +1093,44 @@ P.goal = {
     summary = T("Books finished this year against your goal. Works offline."),
 }
 
+--- The year's finished books narrowed to one collection (a set of files).
+function A.yearIn(yr, set)
+    local list, months, excluded = {}, {}, 0
+    for m = 1, 12 do months[m] = {} end
+    for _, it in ipairs(yr.list or {}) do
+        if set[it.fp] then
+            list[#list + 1] = it
+            if it.excluded then excluded = excluded + 1 end
+            if it.month and months[it.month] then table.insert(months[it.month], it) end
+        end
+    end
+    return { year = yr.year, month = yr.month, months = months, list = list, total = #list - excluded,
+             genres = yr.genres, recent = yr.recent }
+end
+
+--- A goal card's own target for its collection: what's set, or the whole
+--- collection.
+function A.collGoal(cfg, n)
+    local v = tonumber(cfg("coll_target", nil))
+    if v and v > 0 then return floor(v) end
+    return max(1, n or 1)
+end
+
 local function yearFor(env)
     if env.sample then
         return { year = os.date("*t").year, month = os.date("*t").month, total = 29, months = {}, list = {}, genres = {
             { name = T("Horror"), n = 7 }, { name = T("Literary Fiction"), n = 7 }, { name = T("Thriller"), n = 7 } } }
     end
-    return D.year(env.refresh)
+    -- the year the Yearly page shows (this one unless stepped back)
+    local vy = A.viewYear()
+    return D.yearOf(env.refresh, vy)
+end
+
+-- The months of the year shown that have happened: all twelve for a year
+-- gone by, up to this one for this year.
+local function monthsSoFar()
+    local _, current = A.viewYear()
+    return current and os.date("*t").month or 12
 end
 
 -- ─── the year goal as a jar of hearts ────────────────────────────────────────
@@ -1456,21 +1507,34 @@ function P.goal.build(env)
     local s = strip and min(h / 200, w / 620) or min(w / 546, h / 335)
     local px, fpx = scaler(s, env.ts)
     local c = card(env, s)
-    local yr = yearFor(env)
+    -- the goal is always this year's, whichever year the Yearly page shows
+    local yr = env.sample and yearFor(env) or D.year(env.refresh)
+    -- a goal for one collection: only its books count, against the card's own number
+    local coll_name = (not env.sample) and env.cfg("coll", nil) or nil
+    local coll_set, coll_n = D.collectionSet(coll_name)
+    if coll_set and yr then yr = A.yearIn(yr, coll_set) end
     local t = os.date("*t")
     local pad = px(32)
     local jar = jarOn()
     local CYt = not jar and cyLook("goal_look", "terminal")
     local CYs = not jar and not CYt and cyLook("goal_look", "shards")
     local ACg = not jar and not CYt and not CYs and acLook("goal_look", "globe")
+    -- a downloaded style's own picture (stylepacks.lua), where the jar would go
+    local PG = not (jar or CYt or CYs or ACg) and A.packHas and A.packHas("goal")
     local strip_jw = 0
     if ACg and strip then strip_jw = floor(min((h - px(24)) / 2.7, w * 0.09) * 2.4) + px(30) end
-    if jar and strip then strip_jw = min(floor((h - px(30)) * 0.72), floor(w * 0.16)) + px(30) end
+    if (jar or PG) and strip then strip_jw = min(floor((h - px(30)) * 0.72), floor(w * 0.16)) + px(30) end
     if CYs and strip then strip_jw = min(floor((h - px(34)) * 1.2), floor(w * 0.22)) + px(30) end
     local t_label = c:label(tostring(t.year) .. T(" goal"), fpx(22), pad + strip_jw, px(22), { bold = true, caps = true, color = tone.accent })
+    if coll_set then
+        local t_coll = c:text(D.collectionLabel(coll_name), fpx(21), { bold = true, color = tone.muted,
+            max_w = max(1, w - 2 * pad - strip_jw - t_label.w - px(16)) })
+        if t_coll.w > px(30) then c:put(t_coll, w - pad, px(22) + t_label.base, "r", "base") end
+    end
 
     local target, other = D.yearGoal()
     if env.sample then target, other = 36, 0 end
+    if coll_set then target, other = A.collGoal(env.cfg, coll_n), 0 end
     local done = (yr and yr.total or 0) + other
 
     local status
@@ -1527,6 +1591,13 @@ function P.goal.build(env)
         local jw = min(floor(jh * 0.72), floor(w * (strip and 0.16 or 0.36)))
         jh = min(jh, floor(jw / 0.72))
         drawJar(c, pad, jy + floor((h - px(16) - jy - jh) / 2), jw, jh, done, target, px, jarLook(tone))
+        lx = pad + jw + px(30)
+    elseif PG then
+        local jy = strip and px(14) or (top + px(6))
+        local jh = h - jy - px(16)
+        local jw = min(floor(jh * 0.8), floor(w * (strip and 0.16 or 0.36)))
+        jh = min(jh, floor(jw / 0.8))
+        A.packCall("goal", c, pad, jy + floor((h - px(16) - jy - jh) / 2), jw, jh, done, target, tone)
         lx = pad + jw + px(30)
     elseif CYs then
         local jy = strip and px(14) or (top + px(14))
@@ -1942,6 +2013,7 @@ function P.year_covers.build(env)
     local x0 = pad + floor((W - block_w) / 2)
     local y0 = top + floor((H - block_h) / 2)
     local now = os.date("*t")
+    if not select(2, A.viewYear()) then now = { month = 0, year = (A.viewYear()) } end
     local files = {}
 
     local function cell(i)
@@ -2020,7 +2092,7 @@ function P.year_covers.months(env)
     local t_count = c:text("8", fpx(22), { bold = true })
     local top_y = px(26) + t_head.h + px(8) + t_count.h + px(6)
     local max_h = base_y - px(3) - top_y
-    local now_m = os.date("*t").month
+    local now_m = select(2, A.viewYear()) and os.date("*t").month or 0
 
     local max_n = 1
     local months = yr and yr.months or {}
@@ -2143,6 +2215,9 @@ function P.week.build(env)
                 CY.bar(c, x, base_y - bh, bar_w, bh, col, tone.bg, px(3))
             elseif ACc then
                 ACc.candle(c, x + bar_w / 2, base_y, bar_w, bh, d.today, not d.today, tone)
+            elseif v > 0 and A.packHas and A.packHas("chartBar") and A.packCall("chartBar", c, x, base_y - bh, bar_w, bh, tone, col,
+                    { current = d.today, i = i }) then
+                -- a downloaded style's own bar (stylepacks.lua)
             else
                 c:rrect(x, base_y - bh, bar_w, bh, min(bar_w / 2, px(10)), col)
             end
@@ -2344,14 +2419,15 @@ local function longestCard(period)
         local now = os.date("*t")
         local by = env.cfg("by", "time")
         local vy, vm = A.viewMonth()
-        local when = period == "month" and A.monthTitle(vy, vm) or tostring(now.year)
+        local yy = A.viewYear()
+        local when = period == "month" and A.monthTitle(vy, vm) or tostring(yy)
         local rows
         if env.sample then
             rows = SAMPLE
         elseif period == "month" then
             rows = D.longest(env.refresh, vm, by, vy)
         else
-            rows = D.longest(env.refresh, nil, by)
+            rows = D.longest(env.refresh, nil, by, yy)
         end
         if rows == false then
             return emptyState(env, c, s, T("Longest reads"), T("No reading statistics"),
@@ -2366,7 +2442,8 @@ local function longestCard(period)
         local top = px(22) + t_head.h + px(14)
         if not rows then return c end
         if #rows == 0 then
-            local msg = period == "month" and (T("Nothing finished in ") .. when) or T("Nothing finished this year yet")
+            local msg = (period == "month" or not select(2, A.viewYear())) and (T("Nothing finished in ") .. when)
+                or T("Nothing finished this year yet")
             c:label(msg, fpx(24), w / 2, top + (h - top) / 2, { anchor = "c", valign = "mid", color = tone.muted, max_w = w - 2 * pad })
             return c
         end
@@ -2454,6 +2531,821 @@ end
 
 P.longest_year = longestCard("year")
 P.longest_month = longestCard("month")
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Pages goal: pages read this year (or month, or week) against a goal
+-- ════════════════════════════════════════════════════════════════════════════
+
+P.pages_goal = {
+    does = T("nothing"),
+    title = T("Pages goal"), tone = "wine", ratio = 0.61, ratio_narrow = 0.61,
+    summary = T("Pages read this year, this month or this week against a goal of your own. Needs the statistics plugin."),
+}
+
+local PAGES_TARGET = { year = 10000, month = 1000, week = 250 }
+local function pagesText(n) return A.thousands(n) .. " " .. A.i18n.ngettext("page", "pages", n) end
+A.pagesText = pagesText
+
+--- The pages goal for a period, as set on the card (or the default).
+function A.pagesGoalTarget(cfg, period)
+    local v = tonumber(cfg("target_" .. period, nil))
+    if v and v > 0 then return floor(v) end
+    return PAGES_TARGET[period] or PAGES_TARGET.year
+end
+
+-- How far into the period today is (0..1, today counted) and the days left
+-- in it, today included.
+local function periodPace(period)
+    local t = os.date("*t")
+    if period == "week" then
+        local elapsed = ((t.wday - D.weekStart()) % 7) + 1
+        return elapsed / 7, 7 - elapsed + 1
+    elseif period == "month" then
+        local n = tonumber(os.date("%d", os.time{ year = t.year, month = t.month + 1, day = 0, hour = 12 })) or 30
+        return t.day / n, n - t.day + 1
+    end
+    local n = tonumber(os.date("%j", os.time{ year = t.year, month = 12, day = 31, hour = 12 })) or 365
+    local doy = tonumber(os.date("%j")) or 1
+    return doy / n, n - doy + 1
+end
+
+function P.pages_goal.build(env)
+    local w, h, tone = env.w, env.h, env.tone
+    local strip = (w / h) > 2.6
+    local s = strip and min(h / 200, w / 620) or min(w / 546, h / 335)
+    local px, fpx = scaler(s, env.ts)
+    local c = card(env, s)
+    local period = env.cfg("period", "year")
+    if not PAGES_TARGET[period] then period = "year" end
+    local target = A.pagesGoalTarget(env.cfg, period)
+    -- a goal for one collection: only pages in its books count
+    local coll_name = (not env.sample) and env.cfg("coll", nil) or nil
+    local coll_set = D.collectionSet(coll_name)
+    local done
+    if env.sample then
+        done = ({ year = 6240, month = 640, week = 180 })[period]
+    elseif coll_set then
+        local by = D.pagesByBook(env.refresh, period)
+        if by == false then
+            return emptyState(env, c, s, T("Pages goal"), T("No reading statistics"), T("Turn on KOReader's Reading statistics plugin."))
+        end
+        if by then
+            done = 0
+            for fp, n in pairs(by) do if coll_set[fp] then done = done + n end end
+        end
+    elseif period == "year" then
+        local pt = D.pagesTurned(env.refresh, "year")
+        if pt == false then
+            return emptyState(env, c, s, T("Pages goal"), T("No reading statistics"), T("Turn on KOReader's Reading statistics plugin."))
+        end
+        done = pt and pt.pages or nil
+    else
+        local st = D.stats(env.refresh)
+        if st == false then
+            return emptyState(env, c, s, T("Pages goal"), T("No reading statistics"), T("Turn on KOReader's Reading statistics plugin."))
+        end
+        done = st and (period == "month" and st.month_pages or st.week_pages) or nil
+    end
+    local pad = px(32)
+    local t = os.date("*t")
+    local when = (period == "year" and tostring(t.year)) or (period == "month" and A.monthTitle(t.year, t.month)) or T("This week")
+    if coll_set then when = D.collectionLabel(coll_name) .. " \xC2\xB7 " .. when end
+
+    -- a downloaded style's picture on the left, like the Year goal's
+    local PG = A.packHas and A.packHas("goal")
+    local strip_jw = 0
+    if PG and strip then strip_jw = min(floor((h - px(30)) * 0.72), floor(w * 0.16)) + px(30) end
+    local t_label = c:label(T("Pages goal"), fpx(22), pad + strip_jw, px(22), { bold = true, caps = true, color = tone.accent })
+    local t_when = c:text(when, fpx(21), { bold = true, color = tone.muted,
+        max_w = max(1, w - 2 * pad - strip_jw - t_label.w - px(16)) })
+    if t_when.w > px(30) then
+        c:put(t_when, w - pad, px(22) + t_label.base, "r", "base")
+    end
+    local top = px(22) + t_label.h + px(6)
+    local lx = pad
+    if PG then
+        local jy = strip and px(14) or (top + px(6))
+        local jh = h - jy - px(16)
+        local jw = min(floor(jh * 0.8), floor(w * (strip and 0.16 or 0.36)))
+        jh = min(jh, floor(jw / 0.8))
+        A.packCall("goal", c, pad, jy + floor((h - px(16) - jy - jh) / 2), jw, jh, done or 0, target, tone)
+        lx = pad + jw + px(30)
+    end
+    local col_w = w - pad - lx
+
+    -- where things stand
+    local frac_time, days_left = periodPace(period)
+    local frac = (done and target > 0) and min(1, done / target) or 0
+    local status, need
+    if done then
+        local diff = done - target * frac_time
+        local slack = max(1, target * 0.01)
+        if done > target then
+            status = A.tr("Goal reached, +%1", A.thousands(done - target))
+        elseif done >= target then
+            status = T("Goal reached")
+        elseif diff >= slack then
+            status = pagesText(floor(diff)) .. T(" ahead")
+        elseif diff <= -slack then
+            status = pagesText(ceil(-diff)) .. T(" behind")
+        else
+            status = T("On track")
+        end
+        if done < target then need = A.tr("%1 a day to reach it", pagesText(ceil((target - done) / max(1, days_left)))) end
+    end
+
+    -- from the bottom up: the day's need, the status and the percentage, the bar
+    local y = h - px(20)
+    -- the day's need: a little smaller to fit, then on two lines, never cut short
+    local t_need
+    if need then
+        local nsize = fpx(20)
+        for _ = 1, 3 do
+            if c:text(need, nsize).w <= col_w or nsize <= minFont() then break end
+            nsize = max(minFont(), floor(nsize * 0.9))
+        end
+        if c:text(need, nsize).w <= col_w then
+            t_need = c:text(need, nsize, { color = tone.muted })
+        else
+            t_need = c:textbox(need, nsize, col_w, 2, { color = tone.muted })
+        end
+    end
+    local t_pct = c:text(floor(frac * 100 + 0.5) .. "%", fpx(24), { bold = true, color = tone.fg })
+    -- the status beside the percentage: a little smaller before it's cut
+    -- short, and the percentage left out before the status is
+    local st_size, st_room = fpx(24), col_w - t_pct.w - px(16)
+    for _ = 1, 3 do
+        local probe = c:text(status or "\xE2\x80\xA6", st_size, { bold = true })
+        if probe.w <= st_room or st_size <= minFont() then break end
+        st_size = max(minFont(), floor(st_size * 0.88))
+    end
+    local t_status = c:text(status or "\xE2\x80\xA6", st_size, { bold = true, color = tone.accent2 })
+    if t_status.w > st_room then
+        t_pct = nil
+        t_status = c:text(status or "\xE2\x80\xA6", st_size, { bold = true, color = tone.accent2, max_w = col_w })
+    end
+    local bar_h = max(4, px(14))
+    local function room(extra) return y - extra - bar_h - px(14) - top end
+    local big_min = fpx(54)
+    if t_need and room(t_need.h + px(4) + t_status.h + px(10)) >= big_min then
+        y = y - t_need.h
+        c:put(t_need, lx, y)
+        y = y - px(4)
+    end
+    if room(t_status.h + px(10)) >= big_min * 0.8 then
+        y = y - t_status.h
+        c:put(t_status, lx, y)
+        if t_pct then c:put(t_pct, w - pad, y + t_status.base, "r", "base") end
+        y = y - px(10)
+    end
+    local bar_y = y - bar_h
+    if not (A.packBar and A.packBar(c, lx, bar_y, col_w, bar_h, frac, tone, tone.accent)) then
+        c:rrect(lx, bar_y, col_w, bar_h, bar_h / 2, tone.track)
+        if frac > 0 then c:rrect(lx, bar_y, max(bar_h, floor(col_w * frac)), bar_h, bar_h / 2, tone.accent, tone.track) end
+    end
+
+    -- the number, as big as the room between the title and the bar allows
+    local band_top, band_bottom = top, bar_y - px(12)
+    local size = fpx(strip and 90 or (lx > pad and 96 or 120))
+    local big, t_of
+    local of_txt = T("of ") .. pagesText(target)
+    for _ = 1, 6 do
+        big = c:text(done and A.thousands(done) or "\xE2\x80\xA6", size, { bold = true, color = tone.fg })
+        t_of = c:text(of_txt, max(fpx(20), floor(size * 0.26)), { color = tone.accent2 })
+        if big.h <= band_bottom - band_top and big.w + px(14) + t_of.w <= col_w then break end
+        if big.h <= band_bottom - band_top and big.w <= col_w and size <= fpx(64) then
+            t_of = c:text("/ " .. A.thousands(target), max(fpx(20), floor(size * 0.26)), { color = tone.accent2 })
+            if big.w + px(14) + t_of.w <= col_w then break end
+        end
+        size = floor(size * 0.86)
+    end
+    local by = band_top + floor((band_bottom - band_top - big.h) / 2)
+    c:put(big, lx - round(size * 0.03), by)
+    if big.w + px(14) + t_of.w <= col_w then
+        c:put(t_of, lx + big.w + px(14), by + big.base, "l", "base")
+    end
+    return c
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Finish speed: how many days the books you finished took
+-- ════════════════════════════════════════════════════════════════════════════
+-- A dot for each book on a scale from a day to a year (a log scale, so a
+-- weekend's read and a summer's both have room), the typical book's time as
+-- a dashed line and a big number, and the fastest and slowest books.
+
+P.finish_speed = {
+    does = T("shows the book tapped"),
+    title = T("Finish speed"), tone = "ink", ratio = 0.62, ratio_narrow = 1.0,
+    summary = T("How many days the books you finished took, first page to last: the typical book, how many took a week or less, the fastest and the slowest. Needs the statistics plugin."),
+}
+
+local SPEED_SAMPLE = {}
+do
+    local spans = { 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 6, 6, 7, 7, 8, 9, 9, 10, 11, 13, 15 }
+    for i, d in ipairs(spans) do SPEED_SAMPLE[i] = { span = d, title = "", sample = i } end
+    SPEED_SAMPLE[1].title, SPEED_SAMPLE[1].author = "Lovesickness", "Junji Ito"
+    SPEED_SAMPLE[#spans].title, SPEED_SAMPLE[#spans].author = "A Parade of Horribles", "Matt Dinniman"
+end
+
+-- A dot's colour from its book's cover: the cover shrunk to a few pixels,
+-- the vivid ones counting for more than the greys. nil until the cover is in.
+local _dot_colours = {}
+local function coverColour(fp)
+    if not fp then return nil end
+    local hit = _dot_colours[fp]
+    if hit then return hit end
+    local bb = D.cover(fp, 6, 9)
+    if not bb then return nil end
+    local ok, col = pcall(function()
+        local W, H = bb:getWidth(), bb:getHeight()
+        local sr, sg, sb, sw = 0, 0, 0, 0
+        for yy = 0, H - 1 do
+            for xx = 0, W - 1 do
+                local p = bb:getPixel(xx, yy):getColorRGB32()
+                local r, g, b = p.r, p.g, p.b
+                local sat = max(r, g, b) - min(r, g, b)
+                local wgt = 1 + sat * sat / 64
+                sr, sg, sb, sw = sr + r * wgt, sg + g * wgt, sb + b * wgt, sw + wgt
+            end
+        end
+        return { floor(sr / sw), floor(sg / sw), floor(sb / sw) }
+    end)
+    if ok and col then _dot_colours[fp] = col; return col end
+    return nil
+end
+
+-- Dot colours in the style's own colours: the accents and the chart colours,
+-- with a blend between each pair, so the dots differ yet sit in the theme. A
+-- book keeps its colour (picked from its file name).
+local function themeDots(tone)
+    local base, seen = {}, {}
+    local function add(col)
+        if type(col) ~= "table" then return end
+        local k = col[1] .. "," .. col[2] .. "," .. col[3]
+        if seen[k] then return end
+        if math.abs(A.luma(col) - A.luma(tone.bg)) < 40 then col = A.mix(col, tone.fg, 0.4) end
+        seen[k] = true
+        base[#base + 1] = col
+    end
+    add(tone.accent); add(tone.accent2)
+    for _, col in ipairs(tone.series or {}) do add(col) end
+    local pal = {}
+    for i, col in ipairs(base) do
+        pal[#pal + 1] = col
+        local nxt = base[i % #base + 1]
+        if #base > 1 then pal[#pal + 1] = A.mix(col, nxt, 0.5) end
+        pal[#pal + 1] = A.mix(col, tone.fg, 0.3)
+    end
+    return pal
+end
+
+local function themeDot(pal, r, i)
+    local key = r.fp or r.title or ""
+    local h = 0
+    if key ~= "" then
+        for k = 1, #key do h = (h * 31 + key:byte(k)) % 1000003 end
+    else
+        h = r.sample or i
+    end
+    return pal[(h % #pal) + 1]
+end
+
+-- The level each dot sits at in a beeswarm: 0 on the middle line, then
+-- above and below in turn, the first level with room. xs go up in order.
+local function swarm(xs, d, max_level)
+    local placed, out = {}, {}
+    local overflow = false
+    for i, x in ipairs(xs) do
+        local best
+        for k = 0, 2 * max_level do
+            local lv = (k % 2 == 1) and -((k + 1) / 2) or (k / 2)
+            local row = placed[lv]
+            local free = true
+            if row then
+                for j = #row, 1, -1 do
+                    if math.abs(x - row[j]) < d * 0.98 then free = false break end
+                end
+            end
+            if free then best = lv break end
+        end
+        if not best then best = 0; overflow = true end
+        placed[best] = placed[best] or {}
+        local row = placed[best]
+        row[#row + 1] = x
+        out[i] = best
+    end
+    return out, overflow
+end
+
+local function speedPlot(env, c, x0, y0, pw, ph, rows, median, px, fpx)
+    local tone = env.tone
+    local probe = c:text("Ag", fpx(17))
+    local axis_y = y0 + ph - probe.h - px(10)
+    local top, bottom = y0, axis_y - px(8)
+    if bottom - top < px(24) then return end
+    local L = math.log(365)
+    local inset = px(12)
+    local function X(v) return x0 + inset + (pw - 2 * inset) * min(1, math.log(max(1, v)) / L) end
+    local d = A.clamp(floor((bottom - top) / 6.5), px(9), px(22))
+    local max_level = max(0, floor(((bottom - top) / (d * 0.92) - 1) / 2))
+    local xs = {}
+    for i, r in ipairs(rows) do xs[i] = X(r.span) end
+    local levels = swarm(xs, d, max_level)
+    local mid = (top + bottom) / 2
+    -- the typical book: a dashed line
+    local mx = floor(X(median) + 0.5)
+    local dash, gap = max(3, px(7)), max(3, px(6))
+    local yy = top
+    while yy < axis_y do
+        c:rect(mx - max(1, floor(px(3) / 2)), floor(yy), max(2, px(3)), floor(min(dash, axis_y - yy)), tone.muted)
+        yy = yy + dash + gap
+    end
+    -- the dots
+    local mode = env.cfg("dots", "theme")
+    local covers = mode == "covers"
+    local pal = (mode == "accent") and { tone.accent } or themeDots(tone)
+    for i, r in ipairs(rows) do
+        local col = covers and coverColour(r.fp) or nil
+        if not col then col = themeDot(pal, r, i) end
+        if math.abs(A.luma(col) - A.luma(tone.bg)) < 40 then col = A.mix(col, tone.fg, 0.4) end
+        c:disc(xs[i], mid + levels[i] * d * 0.92, d / 2, col)
+    end
+    -- the scale
+    c:rect(x0, axis_y, pw, max(2, px(3)), A.mix(tone.bg, tone.fg, 0.35))
+    local ticks = { { 1, A.plural(1, "day", "days") }, { 7, T("1 week") }, { 30, T("1 month") }, { 365, T("1 year") }, { 91, T("3 months") } }
+    local taken = {}
+    for _, tk in ipairs(ticks) do
+        local t_l = c:text(tk[2], fpx(16), { color = tone.muted })
+        local cx = X(tk[1])
+        local lx = A.clamp(cx - t_l.w / 2, x0, x0 + pw - t_l.w)
+        local ok = true
+        for _, sp in ipairs(taken) do
+            if lx < sp[2] + px(4) and lx + t_l.w > sp[1] - px(4) then ok = false break end
+        end
+        if ok then
+            taken[#taken + 1] = { lx, lx + t_l.w }
+            c:put(t_l, lx, axis_y + max(2, px(3)) + px(6))
+        end
+    end
+end
+
+function P.finish_speed.build(env)
+    local w, h, tone = env.w, env.h, env.tone
+    local s = min(w / 546, h / 400)
+    local px, fpx = scaler(s, env.ts)
+    local c = card(env, s)
+    local period = env.cfg("period", "year")
+    local rows
+    if env.sample then rows = SPEED_SAMPLE else rows = D.finishSpeeds(env.refresh, period) end
+    if rows == false then
+        return emptyState(env, c, s, T("Finish speed"), T("No reading statistics"), T("Turn on KOReader's Reading statistics plugin."))
+    end
+    local pad = px(28)
+    local when = period == "12m" and T("Last 12 months") or tostring(os.date("*t").year)
+    local t_head = c:label(T("Finish speed"), fpx(22), pad, px(22), { bold = true, caps = true, color = tone.accent })
+    local t_when = c:text(when, fpx(21), { bold = true, color = tone.muted })
+    if pad + t_head.w + px(16) + t_when.w <= w - pad then
+        c:put(t_when, w - pad, px(22) + t_head.base, "r", "base")
+    end
+    local top = px(22) + t_head.h + px(14)
+    if not rows then return c end
+    if #rows == 0 then
+        local msg = period == "12m" and T("Nothing finished in the last 12 months") or T("Nothing finished this year yet")
+        c:label(msg, fpx(24), w / 2, top + (h - top) / 2, { anchor = "c", valign = "mid", color = tone.muted, max_w = w - 2 * pad })
+        return c
+    end
+    local n = #rows
+    local median
+    if n % 2 == 1 then median = rows[(n + 1) / 2].span
+    else median = floor((rows[n / 2].span + rows[n / 2 + 1].span) / 2 + 0.5) end
+    local quick = 0
+    for _, r in ipairs(rows) do if r.span <= 7 then quick = quick + 1 end end
+    local fast, slow = rows[1], rows[n]
+
+    -- the fastest and slowest: a column on the right when the card is wide,
+    -- else a row of two along the bottom (when there's room for them)
+    local wide = (w / h) >= 1.25
+    local side_w = wide and floor(w * 0.36) or 0
+    if wide and side_w < px(230) then side_w = 0 end
+    local main_w = w - 2 * pad - (side_w > 0 and (side_w + px(24)) or 0)
+    local foot_h = 0
+    if not wide and h - top > px(330) then
+        foot_h = A.clamp(floor((h - top) * 0.24), px(84), px(130))
+        -- the words in it grow with the text size: make room for them, or
+        -- leave the row out when the card is too short for both
+        local need = c:text("Ag", fpx(16), { bold = true }).h + c:text("Ag", fpx(19), { bold = true }).h
+            + c:text("Ag", fpx(20)).h + px(8)
+        if need > foot_h then foot_h = need end
+        local words = c:text("0", fpx(64), { bold = true }).h + 2 * c:text("Ag", fpx(20)).h + px(20)
+        if h - top - foot_h - px(38) - words < px(100) then foot_h = 0 end
+    end
+
+    local function bookRow(r, label, x, y, rw, rh, region)
+        local ch = min(rh, px(118))
+        local cw = floor(ch * 0.66)
+        c:cover(r.fp, x, y + floor((rh - ch) / 2), cw, ch, { title = r.title, edge = tone.muted })
+        local tx = x + cw + px(14)
+        local tw = rw - cw - px(14)
+        local t1 = c:text(label, fpx(16), { bold = true, caps = true, color = tone.muted, max_w = tw })
+        local t3 = c:text(A.plural(r.span, "day", "days"), fpx(20), { color = tone.accent2, max_w = tw })
+        local probe = c:text("Ag", fpx(19), { bold = true })
+        local title = r.title or ""
+        local lines = (rh >= t1.h + 2 * probe.h + t3.h + px(8)) and 2 or 1
+        -- (one long word is shortened, not broken across lines)
+        if lines == 2 and (c:text(title, fpx(19), { bold = true }).w <= tw or not title:find("%s")) then lines = 1 end
+        local t2 = lines == 2 and c:textbox(title, fpx(19), tw, 2, { bold = true, color = tone.fg })
+            or c:text(title, fpx(19), { bold = true, color = tone.fg, max_w = tw })
+        -- too tall for the row: the label goes first, then the second line
+        if t1.h + t2.h + t3.h + px(4) > rh then t1 = nil end
+        if (t1 and t1.h or 0) + t2.h + t3.h + px(4) > rh then t3 = nil end
+        local th = (t1 and t1.h or 0) + t2.h + (t3 and t3.h or 0) + px(4)
+        local ty = y + max(0, floor((rh - th) / 2))
+        local yy = ty
+        if t1 then c:put(t1, tx, yy); yy = yy + t1.h + px(2) end
+        c:put(t2, tx, yy)
+        if t3 then c:put(t3, tx, yy + t2.h + px(2)) end
+        c:region(region, x, y, rw, rh)
+    end
+    local files = { fast = fast.fp, slow = slow.fp }
+    if side_w > 0 then
+        local sx = w - pad - side_w
+        local gap = px(18)
+        local count = (n > 1) and 2 or 1
+        local rh = min(px(150), floor((h - top - px(20) - gap * (count - 1)) / count))
+        local sy = top + floor((h - top - px(20) - (rh * count + gap * (count - 1))) / 2)
+        bookRow(fast, T("Fastest"), sx, sy, side_w, rh, "book:fast")
+        if count == 2 then bookRow(slow, T("Slowest"), sx, sy + rh + gap, side_w, rh, "book:slow") end
+    elseif foot_h > 0 then
+        local fy = h - px(20) - foot_h
+        if n > 1 then
+            local half = floor((w - 2 * pad - px(20)) / 2)
+            bookRow(fast, T("Fastest"), pad, fy, half, foot_h, "book:fast")
+            bookRow(slow, T("Slowest"), pad + half + px(20), fy, half, foot_h, "book:slow")
+        else
+            bookRow(fast, T("Fastest"), pad, fy, w - 2 * pad, foot_h, "book:fast")
+        end
+    end
+
+    -- the typical book, and how many took a week or less
+    local big = c:text(tostring(median), fpx(64), { bold = true, color = tone.fg })
+    c:put(big, pad, top - px(6))
+    local cap_txt = median == 1 and T("day for a typical book") or T("days for a typical book")
+    local cap_w = main_w - big.w - px(16)
+    local t_cap = c:text(cap_txt, fpx(20), { bold = true, caps = true, color = tone.muted })
+    local y = top - px(6) + big.h + px(4)
+    if t_cap.w <= cap_w then
+        c:put(t_cap, pad + big.w + px(16), top - px(6) + big.base, "l", "base")
+    elseif cap_w >= px(110) then
+        local t2 = c:textbox(cap_txt, fpx(19), cap_w, 2, { bold = true, caps = true, color = tone.muted })
+        c:put(t2, pad + big.w + px(16), top - px(6) + floor((big.h - t2.h) / 2))
+    else
+        t_cap = c:text(cap_txt, fpx(18), { bold = true, caps = true, color = tone.muted, max_w = main_w })
+        c:put(t_cap, pad, y)
+        y = y + t_cap.h + px(4)
+    end
+    local line = quick > 0 and A.tr("You finished %1 in a week or less.", A.plural(quick, "book", "books"))
+        or A.tr("The quickest took %1.", A.plural(fast.span, "day", "days"))
+    local t_line = c:textbox(line, fpx(20), main_w, 2, { color = tone.fg })
+    c:put(t_line, pad, y)
+    y = y + t_line.h + px(10)
+    local plot_bottom = h - px(14) - (foot_h > 0 and (foot_h + px(18)) or 0)
+    speedPlot(env, c, pad, y, main_w, plot_bottom - y, rows, median, px, fpx)
+    if not env.sample then A.state.finish_speed_files = files end
+    return c
+end
+
+function P.finish_speed.tap(env, region)
+    local which = region and region:match("^book:(%a+)$")
+    local fp = which and A.state.finish_speed_files and A.state.finish_speed_files[which]
+    if fp then D.showDetails(env.ctx, fp) end
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Decades: when the books in your library were published
+-- ════════════════════════════════════════════════════════════════════════════
+-- A dot for each book on a line of years (its cover's colour), the typical
+-- book's year as a dashed line and a big number, the decade with the most
+-- books, and the oldest and newest books. The years come from the book files
+-- (pubdates.lua), read in the background the first time.
+
+P.decades = {
+    does = T("shows the book tapped"),
+    title = T("Decades"), tone = "ink", ratio = 0.62, ratio_narrow = 1.0,
+    summary = T("When the books in your library were published: a dot for each book on a line of years, the typical year, the decade with the most books, and the oldest and newest. Can count only finished books, or one collection."),
+}
+
+local DECADES_SAMPLE = {}
+do
+    local years = { 1897, 1925, 1937, 1951, 1954, 1965, 1981, 1986, 1988, 1991, 1995, 1997, 1999,
+        2001, 2003, 2005, 2006, 2008, 2009, 2010, 2011, 2012, 2012, 2013, 2014, 2015, 2016, 2016,
+        2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025 }
+    for i, y in ipairs(years) do DECADES_SAMPLE[i] = { year = y, title = "", sample = i } end
+    DECADES_SAMPLE[1].title, DECADES_SAMPLE[1].author = "Dracula", "Bram Stoker"
+    DECADES_SAMPLE[#years].title, DECADES_SAMPLE[#years].author = "Onyx Storm", "Rebecca Yarros"
+end
+
+-- A tidy step for year ticks: 5, 10, 20, 25, 50, 100, ... years.
+local function yearStep(span, max_ticks)
+    for _, st in ipairs({ 5, 10, 20, 25, 50, 100, 200, 250, 500 }) do
+        if span / st <= max_ticks then return st end
+    end
+    return 1000
+end
+
+local function decadePlot(env, c, x0, y0, pw, ph, rows, median, px, fpx)
+    local tone = env.tone
+    local probe = c:text("Ag", fpx(17))
+    local axis_y = y0 + ph - probe.h - px(10)
+    local top, bottom = y0, axis_y - px(8)
+    if bottom - top < px(24) then return end
+    local n = #rows
+    -- the years shown: the oldest book to the newest, but a few very old
+    -- books don't get to squash everyone else into a corner (they sit at the
+    -- left edge)
+    local lo, hi = rows[1].year, rows[n].year
+    local cut = false
+    if hi - lo > 120 and n >= 8 then
+        local p = rows[max(1, floor(n * 0.04) + 1)].year
+        if hi - p < (hi - lo) * 0.6 then lo = p; cut = true end
+    end
+    -- the books older than the line starts all sit at its left end, as one year
+    local first_shown = lo
+    local function shownYear(y) return cut and max(y, first_shown) or y end
+    if hi - lo < 20 then
+        local mid_y = (hi + lo) / 2
+        lo, hi = floor(mid_y - 10), floor(mid_y + 10)
+    end
+    local margin = max(1, floor((hi - lo) * 0.04 + 0.5))
+    lo, hi = lo - margin, hi + 1 + margin
+    local step = yearStep(hi - lo, max(3, floor(pw / px(105))))
+    local inset = px(12)
+    local function X(y)
+        return x0 + inset + (pw - 2 * inset) * A.clamp((y + 0.5 - lo) / (hi - lo), 0, 1)
+    end
+    -- A big library: one dot for several books of the same year (2, 5, 10,
+    -- ...), so the swarm stays readable; a year's last few books get a
+    -- smaller dot, its area the share of a full one. The fewest books per dot
+    -- that keeps the dots to what fits at a readable size.
+    local d0 = A.clamp(floor((bottom - top) / 6.5), px(9), px(22))
+    local fit = floor(0.45 * ((pw - 2 * inset) / d0) * ((bottom - top) / (d0 * 0.92)))
+    local cap = A.clamp(fit, 30, 160)
+    local per_dot = 1
+    if n > cap then
+        local by_year, years = {}, {}
+        for _, r in ipairs(rows) do
+            local y = shownYear(r.year)
+            if not by_year[y] then by_year[y] = 0; years[#years + 1] = y end
+            by_year[y] = by_year[y] + 1
+        end
+        for _, k in ipairs({ 2, 3, 4, 5, 10, 20, 25, 50, 100, 200, 500, 1000 }) do
+            per_dot = k
+            local dots = 0
+            for _, y in ipairs(years) do dots = dots + math.ceil(by_year[y] / k) end
+            if dots <= cap then break end
+        end
+    end
+    local dots = rows
+    if per_dot > 1 then
+        dots = {}
+        local i0 = 1
+        while i0 <= n do
+            local y = shownYear(rows[i0].year)
+            local j = i0
+            while j + 1 <= n and shownYear(rows[j + 1].year) == y and j - i0 + 1 < per_dot do j = j + 1 end
+            dots[#dots + 1] = { year = y, fp = rows[i0].fp, sample = rows[i0].sample, n = j - i0 + 1 }
+            i0 = j + 1
+        end
+    end
+    local nd = #dots
+    -- each dot somewhere along its year (a steady spread, not random), so a
+    -- big library packs into a swarm instead of a column per year
+    local xs = {}
+    for k, r in ipairs(dots) do xs[k] = X(r.year - 0.5 + (k * 0.6180339) % 1) end
+    local d = d0
+    local max_level, levels
+    while true do
+        max_level = max(0, floor(((bottom - top) / (d * 0.92) - 1) / 2))
+        local over
+        levels, over = swarm(xs, d, max_level)
+        if not over or d <= px(4) then break end
+        d = max(px(4), floor(d * 0.85))
+    end
+    local mid = (top + bottom) / 2
+    -- the typical book: a dashed line
+    local mx = floor(X(median) + 0.5)
+    local dash, gap = max(3, px(7)), max(3, px(6))
+    local yy = top
+    while yy < axis_y do
+        c:rect(mx - max(1, floor(px(3) / 2)), floor(yy), max(2, px(3)), floor(min(dash, axis_y - yy)), tone.muted)
+        yy = yy + dash + gap
+    end
+    -- the dots (cover colours, when picked, for up to 250 dots; else the style's)
+    local mode = env.cfg("dots", "theme")
+    local covers = mode == "covers"
+    local pal = (mode == "accent") and { tone.accent } or themeDots(tone)
+    for i, r in ipairs(dots) do
+        local col = (covers and nd <= 250) and coverColour(r.fp) or nil
+        if not col then col = themeDot(pal, r, i) end
+        if math.abs(A.luma(col) - A.luma(tone.bg)) < 40 then col = A.mix(col, tone.fg, 0.4) end
+        local rad = d / 2
+        if per_dot > 1 and r.n < per_dot then rad = max(px(2), rad * math.sqrt(r.n / per_dot)) end
+        c:disc(xs[i], mid + levels[i] * d * 0.92, rad, col)
+    end
+    -- the scale
+    c:rect(x0, axis_y, pw, max(2, px(3)), A.mix(tone.bg, tone.fg, 0.35))
+    local taken = {}
+    -- grouped: what a dot stands for, at the right end of the scale
+    if per_dot > 1 then
+        local t_g = c:text(A.tr("= %1", A.plural(per_dot, "book", "books")), fpx(16), { bold = true, color = tone.muted })
+        local gx = x0 + pw - t_g.w
+        local gy = axis_y + max(2, px(3)) + px(6)
+        local dr = max(px(4), floor(t_g.h * 0.3))
+        c:disc(gx - px(6) - dr, gy + t_g.h / 2, dr, tone.accent)
+        c:put(t_g, gx, gy)
+        taken[#taken + 1] = { gx - px(6) - 2 * dr, x0 + pw }
+    end
+    -- older books than the line shows sit at its left end: "‹ 1640"
+    if cut then
+        local t_o = c:text("\xE2\x80\xB9 " .. rows[1].year, fpx(16), { bold = true, color = tone.muted })
+        taken[#taken + 1] = { x0, x0 + t_o.w }
+        c:put(t_o, x0, axis_y + max(2, px(3)) + px(6))
+    end
+    for yv = math.ceil(lo / step) * step, hi, step do
+        local label = tostring(yv)
+        local t_l = c:text(label, fpx(16), { color = tone.muted })
+        local cx = X(yv - 0.5)
+        local lx = A.clamp(cx - t_l.w / 2, x0, x0 + pw - t_l.w)
+        local ok = true
+        for _, sp in ipairs(taken) do
+            if lx < sp[2] + px(6) and lx + t_l.w > sp[1] - px(6) then ok = false break end
+        end
+        if ok then
+            taken[#taken + 1] = { lx, lx + t_l.w }
+            c:rect(floor(cx), axis_y + max(2, px(3)), max(1, px(2)), px(5), A.mix(tone.bg, tone.fg, 0.35))
+            c:put(t_l, lx, axis_y + max(2, px(3)) + px(6))
+        end
+    end
+end
+
+function P.decades.build(env)
+    local w, h, tone = env.w, env.h, env.tone
+    local s = min(w / 546, h / 400)
+    local px, fpx = scaler(s, env.ts)
+    local c = card(env, s)
+    local scope = env.cfg("books", "library")
+    local coll = env.cfg("coll", "")
+    local data
+    if env.sample then
+        data = { rows = DECADES_SAMPLE, none = 3, pending = 0, total = #DECADES_SAMPLE + 3 }
+    else
+        data = D.decades(env.refresh, scope, coll)
+    end
+    local pad = px(28)
+    local which = (coll ~= "" and D.collectionLabel(coll)) or (scope == "finished" and T("Finished")) or T("Library")
+    local t_head = c:label(T("Decades"), fpx(22), pad, px(22), { bold = true, caps = true, color = tone.accent })
+    local t_when = c:text(which, fpx(21), { bold = true, color = tone.muted, max_w = max(px(40), w - 2 * pad - t_head.w - px(16)) })
+    if pad + t_head.w + px(16) + t_when.w <= w - pad then
+        c:put(t_when, w - pad, px(22) + t_head.base, "r", "base")
+    end
+    local top = px(22) + t_head.h + px(14)
+    if data == false then
+        return emptyState(env, c, s, T("Decades"), T("No library found"), T("Set a home folder in KOReader's file browser."))
+    end
+    if not data then return c end
+    local rows = data.rows
+    local n = #rows
+    if n == 0 then
+        local msg
+        if data.pending > 0 then
+            msg = A.tr("Reading publication dates\xE2\x80\xA6 %1 to go", data.pending)
+        elseif data.total == 0 then
+            msg = scope == "finished" and T("No finished books yet") or T("No books here yet")
+        else
+            msg = T("None of these books has a publication date")
+        end
+        c:label(msg, fpx(24), w / 2, top + (h - top) / 2, { anchor = "c", valign = "mid", color = tone.muted, max_w = w - 2 * pad })
+        return c
+    end
+    local median
+    if n % 2 == 1 then median = rows[(n + 1) / 2].year
+    else median = floor((rows[n / 2].year + rows[n / 2 + 1].year) / 2) end
+    -- the decade with the most books
+    local per, best, best_n = {}, nil, 0
+    for _, r in ipairs(rows) do
+        local dk = floor(r.year / 10) * 10
+        per[dk] = (per[dk] or 0) + 1
+        if per[dk] > best_n or (per[dk] == best_n and dk > best) then best, best_n = dk, per[dk] end
+    end
+    local old, new = rows[1], rows[n]
+
+    -- the oldest and newest: a column on the right when the card is wide,
+    -- else a row of two along the bottom (when there's room for them)
+    local wide = (w / h) >= 1.25
+    local side_w = wide and floor(w * 0.36) or 0
+    if wide and side_w < px(230) then side_w = 0 end
+    local main_w = w - 2 * pad - (side_w > 0 and (side_w + px(24)) or 0)
+    local foot_h = 0
+    if not wide and h - top > px(330) then
+        foot_h = A.clamp(floor((h - top) * 0.24), px(84), px(130))
+        -- the words in it grow with the text size: make room for them, or
+        -- leave the row out when the card is too short for both
+        local need = c:text("Ag", fpx(16), { bold = true }).h + c:text("Ag", fpx(19), { bold = true }).h
+            + c:text("Ag", fpx(20)).h + px(8)
+        if need > foot_h then foot_h = need end
+        local words = c:text("0", fpx(64), { bold = true }).h + 2 * c:text("Ag", fpx(20)).h + px(20)
+        if h - top - foot_h - px(38) - words < px(100) then foot_h = 0 end
+    end
+
+    local function bookRow(r, label, x, y, rw, rh, region)
+        local ch = min(rh, px(118))
+        local cw = floor(ch * 0.66)
+        c:cover(r.fp, x, y + floor((rh - ch) / 2), cw, ch, { title = r.title, edge = tone.muted })
+        local tx = x + cw + px(14)
+        local tw = rw - cw - px(14)
+        local t1 = c:text(label, fpx(16), { bold = true, caps = true, color = tone.muted, max_w = tw })
+        local t3 = c:text(tostring(r.year), fpx(20), { color = tone.accent2, max_w = tw })
+        local probe = c:text("Ag", fpx(19), { bold = true })
+        local title = r.title or ""
+        local lines = (rh >= t1.h + 2 * probe.h + t3.h + px(8)) and 2 or 1
+        if lines == 2 and (c:text(title, fpx(19), { bold = true }).w <= tw or not title:find("%s")) then lines = 1 end
+        local t2 = lines == 2 and c:textbox(title, fpx(19), tw, 2, { bold = true, color = tone.fg })
+            or c:text(title, fpx(19), { bold = true, color = tone.fg, max_w = tw })
+        -- too tall for the row: the label goes first, then the second line
+        if t1.h + t2.h + t3.h + px(4) > rh then t1 = nil end
+        if (t1 and t1.h or 0) + t2.h + t3.h + px(4) > rh then t3 = nil end
+        local th = (t1 and t1.h or 0) + t2.h + (t3 and t3.h or 0) + px(4)
+        local ty = y + max(0, floor((rh - th) / 2))
+        local yy = ty
+        if t1 then c:put(t1, tx, yy); yy = yy + t1.h + px(2) end
+        c:put(t2, tx, yy)
+        if t3 then c:put(t3, tx, yy + t2.h + px(2)) end
+        c:region(region, x, y, rw, rh)
+    end
+    local files = { old = old.fp, new = new.fp }
+    if side_w > 0 then
+        local sx = w - pad - side_w
+        local gap = px(18)
+        local count = (n > 1) and 2 or 1
+        local rh = min(px(150), floor((h - top - px(20) - gap * (count - 1)) / count))
+        local sy = top + floor((h - top - px(20) - (rh * count + gap * (count - 1))) / 2)
+        bookRow(old, T("Oldest"), sx, sy, side_w, rh, "book:old")
+        if count == 2 then bookRow(new, T("Newest"), sx, sy + rh + gap, side_w, rh, "book:new") end
+    elseif foot_h > 0 then
+        local fy = h - px(20) - foot_h
+        if n > 1 then
+            local half = floor((w - 2 * pad - px(20)) / 2)
+            bookRow(old, T("Oldest"), pad, fy, half, foot_h, "book:old")
+            bookRow(new, T("Newest"), pad + half + px(20), fy, half, foot_h, "book:new")
+        else
+            bookRow(old, T("Oldest"), pad, fy, w - 2 * pad, foot_h, "book:old")
+        end
+    end
+
+    -- the typical year, the busiest decade, and what has no date
+    local big = c:text(tostring(median), fpx(64), { bold = true, color = tone.fg })
+    c:put(big, pad, top - px(6))
+    local cap_txt = T("year for a typical book")
+    local cap_w = main_w - big.w - px(16)
+    local t_cap = c:text(cap_txt, fpx(20), { bold = true, caps = true, color = tone.muted })
+    local y = top - px(6) + big.h + px(4)
+    if t_cap.w <= cap_w then
+        c:put(t_cap, pad + big.w + px(16), top - px(6) + big.base, "l", "base")
+    elseif cap_w >= px(110) then
+        local t2 = c:textbox(cap_txt, fpx(19), cap_w, 2, { bold = true, caps = true, color = tone.muted })
+        c:put(t2, pad + big.w + px(16), top - px(6) + floor((big.h - t2.h) / 2))
+    else
+        t_cap = c:text(cap_txt, fpx(18), { bold = true, caps = true, color = tone.muted, max_w = main_w })
+        c:put(t_cap, pad, y)
+        y = y + t_cap.h + px(4)
+    end
+    local decades_n = 0
+    for _ in pairs(per) do decades_n = decades_n + 1 end
+    local line
+    if best_n > 1 then
+        line = A.tr("Most are from the %1: %2.", A.tr("%1s", best), A.plural(best_n, "book", "books"))
+    else
+        line = A.tr("One book each from %1 decades.", decades_n)
+    end
+    if data.pending > 0 then
+        line = line .. " " .. A.tr("Still reading dates: %1 to go.", data.pending)
+    elseif data.none > 0 then
+        line = line .. " " .. A.tr("%1 with no date.", A.plural(data.none, "book", "books"))
+    end
+    local t_line = c:textbox(line, fpx(20), main_w, 2, { color = tone.fg })
+    c:put(t_line, pad, y)
+    y = y + t_line.h + px(10)
+    local plot_bottom = h - px(14) - (foot_h > 0 and (foot_h + px(18)) or 0)
+    decadePlot(env, c, pad, y, main_w, plot_bottom - y, rows, median, px, fpx)
+    if not env.sample then A.state.decades_files = files end
+    return c
+end
+
+function P.decades.tap(env, region)
+    local which = region and region:match("^book:(%a+)$")
+    local fp = which and A.state.decades_files and A.state.decades_files[which]
+    if fp then D.showDetails(env.ctx, fp) end
+end
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- Finish by: a real book against a date (a library loan, say)
@@ -2762,7 +3654,8 @@ function P.bookclub.build(env)
             local tx = x + cover_w + px(20)
             local tw = col_w - cover_w - px(20)
             -- bottom of the column: status over a small progress bar (or a stem)
-            local mb_h = garden and max(px(20), min(px(44), floor(cover_h * 0.3))) or max(4, px(9))
+            local mb_h = garden and max(px(20), min(px(44), floor(cover_h * 0.3)))
+                or (A.packHas and A.packHas("bar")) and max(7, px(16)) or max(5, px(11))
             local status = b.finished and T("Finished") or (b.pct > 0 and string.format("%d%%", floor(b.pct * 100 + 0.5)) or T("Not started"))
             local t_status = c:text(status, fpx(22), { bold = true, max_w = tw,
                 color = (b.finished and tone.accent) or (b.pct > 0 and tone.fg) or tone.muted })
@@ -2779,6 +3672,8 @@ function P.bookclub.build(env)
                 mb_h = max(4, px(10))
                 mb_y = cy + cover_h - mb_h
                 AC.inkLine(c, tx, mb_y, tw, mb_h, b.pct, tone)
+            elseif A.packBar and A.packBar(c, tx, mb_y, tw, mb_h, b.pct, tone, tone.accent) then
+                -- a downloaded style's own bar
             else
                 c:rrect(tx, mb_y, tw, mb_h, mb_h / 2, tone.track)
                 if b.pct > 0 then
@@ -2902,7 +3797,10 @@ function P.week_rings.build(env)
                 { anchor = "c", bold = true, color = day.today and tone.accent or tone.label })
             local fp = day.future and 0 or day.pages / page_goal
             local fm = day.future and 0 or (day.secs / 60) / min_goal
-            if hearts() then
+            if A.packHas and A.packHas("day") and A.packCall("day", c, cx, cy, d, fp, fm, tone,
+                    { future = day.future, today = day.today, past = not day.future and not day.today }) then
+                -- a downloaded style's own day (stylepacks.lua)
+            elseif hearts() then
                 dayHeart(c, cx, cy, d, tone, fp, fm, { future = day.future, past = not day.future and not day.today })
             else
                 -- segments: a day that's over and missed its goals is red
@@ -3043,7 +3941,10 @@ function P.month_rings.build(env)
             local future = d > today
             local fp = future and 0 or (rec.pages or 0) / page_goal
             local fm = future and 0 or ((rec.secs or 0) / 60) / min_goal
-            if hearts() then
+            if A.packHas and A.packHas("day") and A.packCall("day", c, cx, cy, d_ring, fp, fm, tone,
+                    { future = future, today = current and d == today, past = d < today, small = not two }) then
+                -- a downloaded style's own day (stylepacks.lua)
+            elseif hearts() then
                 dayHeart(c, cx, cy, d_ring, tone, fp, fm, { future = future, past = d < today, single = not two })
             else
                 local c1, c2 = cols[1], cols[2]
@@ -3158,8 +4059,8 @@ function P.year_chart.build(env)
         -- in greys the two accents look alike: ink for books, a light grey for pages
         cols = { tone.fg, A.mix(tone.bg, tone.fg, 0.45) }
     end
-    local now = os.date("*t")
-    local cur = now.month
+    local vy, current = A.viewYear()
+    local cur = monthsSoFar()
     local mode = env.cfg("pages", "read")
 
     -- the figures, month by month
@@ -3169,7 +4070,7 @@ function P.year_chart.build(env)
         for m = 1, 12 do books[m], pages[m] = SAMPLE_BOOKS[m], SAMPLE_PAGES[m] end
         cur = 10
     else
-        local yr = D.year(env.refresh)
+        local yr = D.yearOf(env.refresh, vy)
         for m = 1, 12 do
             local list = yr and yr.months and yr.months[m] or {}
             books[m] = #list
@@ -3180,7 +4081,11 @@ function P.year_chart.build(env)
         if mode == "read" then
             local st = statsFor(env)
             if st and st.month_pages then
-                for m = 1, 12 do pages[m] = st.month_pages[m] or 0 end
+                if current then
+                    for m = 1, 12 do pages[m] = st.month_pages[m] or 0 end
+                else
+                    pages = D.yearMonths(st, vy)
+                end
             else
                 have_pages = false
             end
@@ -3264,13 +4169,13 @@ function P.year_chart.build(env)
     local col_w = (x1 - x0) / 11
     local names, widest = {}, 0
     for m = 1, 12 do
-        names[m] = A.date("%b", os.time{ year = now.year, month = m, day = 1, hour = 12 })
+        names[m] = A.date("%b", os.time{ year = vy, month = m, day = 1, hour = 12 })
         local t = c:text(names[m], fpx(19), { bold = true })
         widest = max(widest, t.w)
     end
     if widest > col_w * 0.92 then names = MONTH_LETTERS end
     for m = 1, 12 do
-        local is_cur = (m == cur)
+        local is_cur = (m == cur) and current
         c:label(names[m], fpx(19), xs[m], plot_bottom + px(8),
             { anchor = "c", bold = true, color = is_cur and tone.fg or tone.label })
         -- tapping a month lists the books finished in it
@@ -3310,6 +4215,12 @@ function P.year_chart.build(env)
         -- engraved hatching under each line, the pages' one way, the books' the other
         if ppts then ACl.hatch(c, ppts, floor(plot_bottom), cols[2], 1) end
         ACl.hatch(c, bpts, floor(plot_bottom), cols[1], -1)
+    end
+    if not (cozy or CY or ACl) and A.packHas and A.packHas("line") then
+        -- a downloaded style's own lines (stylepacks.lua)
+        local okp = (not ppts) or A.packCall("line", c, ppts, pxs, pys, cur, lw, cols[2], tone, { series = 2 })
+        local okb = A.packCall("line", c, bpts, bxs, bys, cur, lw, cols[1], tone, { series = 1 })
+        if okp and okb then return c end
     end
     if ppts then c:polyline(ppts, lw, cols[2]) end
     c:polyline(bpts, lw, cols[1])
@@ -3474,6 +4385,9 @@ local function barChart(c, tone, s, ts, o)
                     if is_cur then bh = bh + min(floor(bar_w * 1.7), px(46)) end
                 elseif CY then
                     CY.bar(c, bx, base - bh, bar_w, bh, is_cur and tone.accent or tone.accent2, tone.bg, px(3))
+                elseif not cozy and A.packHas and A.packHas("chartBar") and A.packCall("chartBar", c, bx, base - bh, bar_w, bh, tone,
+                        is_cur and tone.accent or tone.accent2, { current = is_cur, i = i }) then
+                    -- a downloaded style's own bar (stylepacks.lua)
                 elseif not cozy then
                     local col = is_cur and tone.accent or tone.accent2
                     -- rounded on top, square where it stands on the axis
@@ -3576,8 +4490,8 @@ function P.year_time.build(env)
     local s = min(w / 546, h / 400)
     local px, fpx = scaler(s, env.ts)
     local c = card(env, s)
-    local now = os.date("*t")
-    local cur, secs = now.month, {}
+    local now = { year = (A.viewYear()) }
+    local cur, secs = monthsSoFar(), {}
     if env.sample then
         cur = 10
         for m = 1, 12 do secs[m] = SAMPLE_MONTH_SECS[m] end
@@ -3587,7 +4501,13 @@ function P.year_time.build(env)
             return emptyState(env, c, s, T("Time read"), T("No reading statistics"),
                 T("Turn on KOReader's Reading statistics plugin."))
         end
-        for m = 1, 12 do secs[m] = st and st.month_secs and st.month_secs[m] or 0 end
+        local vy, current = A.viewYear()
+        if current then
+            for m = 1, 12 do secs[m] = st and st.month_secs and st.month_secs[m] or 0 end
+        else
+            local _, ms = D.yearMonths(st, vy)
+            secs = ms
+        end
     end
     local pad = px(28)
     local t_head = c:label(T("Time read"), fpx(22), pad, px(22), { bold = true, caps = true, color = tone.accent })
@@ -3613,9 +4533,9 @@ function P.year_time.build(env)
     local top = px(22) + t_head.h + px(22)
     barChart(c, tone, s, env.ts, {
         x = pad, y = top, w = w - 2 * pad, h = h - top - px(18),
-        n = 12, values = values, labels = labels, current = cur, bar_k = 0.62,
+        n = 12, values = values, labels = labels, current = select(2, A.viewYear()) and cur or nil, bar_k = 0.62,
         floor_top = 4, fmt = function(v) return figure(v) .. " h" end,
-        mark = secs[cur] > 0 and hoursText(secs[cur]) or nil, region = "month:",
+        mark = (select(2, A.viewYear()) and secs[cur] > 0) and hoursText(secs[cur]) or nil, region = "month:",
     })
     return c
 end
@@ -3989,6 +4909,7 @@ end
 function P.heading(env, kicker, title, nav)
     local w, h = env.w, env.h
     local bg, fg, dark, accent = A.dashPage()
+    if env.see then bg, fg, dark, accent = A.plateColours() end
     local c = A.canvas{ w = w, h = h, plain = true }
     local s = h / 150
     local px, fpx = scaler(s, env.ts)
@@ -4333,6 +5254,8 @@ function P.trends.build(env)
             elseif ACt then
                 c:frame(x, ty, tw, th, 0, 1, A.mix(tone.bg, tone.fg, 0.3), card_bg)
                 c:disc(x + tw / 2, ty + th - max(5, px(9)), max(3, px(5)), tone.bg, card_bg)
+            elseif A.packHas and A.packHas("trendTile") and A.packCall("trendTile", c, x, ty, tw, th, tone, i) then
+                -- a downloaded style's own tile (stylepacks.lua)
             else
                 c:rrect(x, ty, tw, th, min(px(24), floor(tile_h / 3)), tile_bg)
             end
@@ -4343,6 +5266,8 @@ function P.trends.build(env)
             local dir = it.group == "keep" and "up" or (it.group == "look" and "down" or "flat")
             if notes then
                 trendDoodle(c, bx, by, r, dir, tone, px)
+            elseif not (CYd or ACt) and A.packHas and A.packHas("trendBadge") and A.packCall("trendBadge", c, bx, by, r, dir, tone, col) then
+                -- a downloaded style's own mark (stylepacks.lua)
             else
                 trendBadge(c, bx, by, r, dir, col, ACt and card_bg or disc_bg, CYd)
             end
@@ -4508,7 +5433,12 @@ function P.challenge.build(env)
     local ACh = not flower and not CYr and not CYn and acLook("challenge_style", "hourglass")
     local ACc = not flower and not CYr and not CYn and not ACh and acLook("challenge_style", "chess")
     local mate = false
-    if flower then
+    -- a downloaded style's own centrepiece (stylepacks.lua), in place of the plain ring
+    local packed = not (flower or CYr or CYn or ACh or ACc) and A.packChallenge
+        and A.packChallenge(c, cx, cy, R, min(1, ch.frac), tone, col)
+    if packed then
+        -- drawn; the percentage goes with the text beside it
+    elseif flower then
         -- a peony coloured in petal by petal; the leaves reach a little past R
         local look
         look, col = flowerLook(tone)
@@ -4536,7 +5466,7 @@ function P.challenge.build(env)
     local room = w - pad - tx
     local lines = {
         { challengeGoal(ch), 30, tone.fg, true },
-        { challengeDone(ch) .. ((flower or ACh or ACc or CYn) and ("  \xC2\xB7  " .. pct .. "%") or ""), 24, col, true },
+        { challengeDone(ch) .. ((flower or ACh or ACc or CYn or packed) and ("  \xC2\xB7  " .. pct .. "%") or ""), 24, col, true },
         { (mate and ch.done <= ch.target) and T("Checkmate!") or challengeNeed(ch), 21, ch.complete and col or tone.muted, true },
     }
     local status = (not ch.complete) and (ch.on_pace and T("On pace") or T("Behind pace")) or nil
@@ -4554,8 +5484,10 @@ function P.challenge.build(env)
     end
     local t_status
     if status then
+        -- (the pill is the challenge's colour: dark text on a light one, as
+        -- the days' white is on dark cards)
         t_status = c:text(status, max(minFont(), floor(fpx(20) * size_k)), { bold = true, caps = CYr and true or nil,
-            color = ch.on_pace and tone.btn_fg or tone.fg })
+            color = ch.on_pace and ((A.luma(col) > 140) and { 0, 0, 0 } or { 255, 255, 255 }) or tone.fg })
     end
     local gap_l = px(10)
     local pill_h = t_status and (t_status.h + px(8)) or 0
@@ -6289,14 +7221,14 @@ function P.quote.build(env)
         return emptyState(env, c, s, T("Quote of the day"), T("No highlights yet"),
             T("Highlight a line while you read and it can show up here."))
     end
-    if q and not env.sample then A.state.quote_fp = q.filepath end
+    if q and not env.sample then A.state.quote_fp, A.state.quote_text = q.filepath, q.text end
     return drawQuote(env, c, s, { head = T("Quote of the day"), text = q and q.text, source = q and quoteSource(q) })
 end
 
 function P.quote.tap(env, region)
     if region == "another" then D.nextQuote() return end
     local fp = A.state.quote_fp
-    if fp then D.openBook(env.ctx, fp) end
+    if fp then D.openQuote(env.ctx, fp, A.state.quote_text) end
 end
 function P.quote.keep(region) return region == "another" end
 function P.quote.controls(region) return region == "another" end
@@ -6442,7 +7374,7 @@ for _, name in ipairs(MORE_QUOTES) do
     P[name].tap = function(env, region)
         if region == "another" then A.quoteAgain(name) return end
         local fp = A.state[name .. "_fp"]
-        if fp then D.openBook(env.ctx, fp) end
+        if fp then D.openQuote(env.ctx, fp, A.state[name .. "_text"]) end
     end
     P[name].keep = function(region) return region == "another" end
     P[name].controls = function(region) return region == "another" end
@@ -6493,19 +7425,34 @@ local function timelineTrack(c, day, x, y, w, bh, px, fpx, tone, labels)
     local from = d0 + first_hr * 3600
     local span = 24 * 3600 - first_hr * 3600
     local function xAt(when) return x + w * A.clamp((when - from) / span, 0, 1) end
-    c:rrect(x, y, w, bh, bh / 2, tone.track)
     local colours, order = {}, 0
     local pal = { tone.series[1], tone.series[2], tone.accent, tone.label }
     for _, sit in ipairs(day.sittings) do
         local k = sit.book or sit.title or 0
         if not colours[k] then order = order + 1; colours[k] = pal[(order - 1) % #pal + 1] end
+    end
+    local now = os.time()
+    -- a downloaded style's own strip (stylepacks.lua)
+    local packed = false
+    if A.packHas and A.packHas("timeline") then
+        local spans = {}
+        for _, sit in ipairs(day.sittings) do
+            spans[#spans + 1] = { (xAt(sit.start) - x) / w, (xAt(max(sit.stop, sit.start + 60)) - x) / w,
+                colours[sit.book or sit.title or 0] }
+        end
+        packed = A.packCall("timeline", c, x, y, w, bh, spans, now > from and (xAt(now) - x) / w or nil, tone)
+    end
+    if not packed then
+    c:rrect(x, y, w, bh, bh / 2, tone.track)
+    for _, sit in ipairs(day.sittings) do
+        local k = sit.book or sit.title or 0
         local x1, x2 = xAt(sit.start), xAt(max(sit.stop, sit.start + 60))
         local bw_ = max(bh * 0.5, x2 - x1)
         c:rrect(min(x1, x + w - bw_), y, bw_, bh, min(bh / 2, bw_ / 2), colours[k], tone.track)
     end
+    end
     -- now
-    local now = os.time()
-    if now > from then
+    if not packed and now > from then
         local nx = xAt(now)
         c:rect(floor(nx - max(1, px(2))), y - px(8), max(2, px(4)), bh + px(16), tone.fg)
     end
@@ -6975,6 +7922,10 @@ local function coverCell(c, x, y, w, h, day_n, books, o, px, fpx, tone)
                 c:cover(books[2].fp, bx + fan, by + floor(fan / 2), cw, ch, { title = books[2].title, edge = tone.border or tone.track })
             end
             c:cover(books[1].fp, bx, by, cw, ch, { title = books[1].title, edge = tone.border or tone.track })
+            -- a downloaded style can dress it (stylepacks.lua)
+            if A.packHas and A.packHas("calendarCover") then
+                A.packCall("calendarCover", c, bx, by, cw + fan, ch + floor(fan / 2), tone, { today = is_today })
+            end
         end
         if #books > 2 and o.num_px then
             local t_more = c:text("+" .. (#books - 2), o.num_px, { bold = true, color = tone.btn_fg })
@@ -6993,6 +7944,10 @@ local function coverCell(c, x, y, w, h, day_n, books, o, px, fpx, tone)
             bh = bh + px(5) + bar
         end
         return { x = bx, y = by, w = cw + fan, h = bh }
+    end
+    if not (o.cy or o.ac) and A.packHas and A.packHas("calendarEmpty")
+            and A.packCall("calendarEmpty", c, x, y, w, h, day_n, tone, { today = is_today, future = future, num_px = o.num_px }) then
+        return
     end
     local t_n = c:text(tostring(day_n), o.num_px, { bold = true,
         color = is_today and tone.btn_fg or (future and A.mix(tone.bg, tone.label, 0.45) or tone.label) })
@@ -7298,7 +8253,7 @@ P.mini = {
 A.MINI_TILES = { "today", "control", "reading", "rings", "compare", "week", "challenge", "forecast", "goal",
     "timeline", "pick", "quote", "library", "coverweek" }
 A.MINI_DEFAULT = { "today", "control" }
-A.MINI_MAX = 3
+A.MINI_MAX = 4
 A.MINI_LABEL = {
     today = T("Reading and today's rings"), reading = T("Continue reading"), rings = T("Activity rings"),
     control = T("Control centre"), compare = T("This week vs last"), week = T("Week rings"),
@@ -7352,38 +8307,64 @@ function MINI.reading(c, env, x, y, w, h, px, fpx, tone)
             color = tone.muted, max_w = w })
         return
     end
+    -- a taller card gets a bigger cover (up to 42% of the width)
     local cov_h = h
     local cov_w = floor(cov_h / 1.5)
-    if cov_w > w * 0.38 then cov_w = floor(w * 0.38); cov_h = floor(cov_w * 1.5) end
+    if cov_w > w * 0.42 then cov_w = floor(w * 0.42); cov_h = floor(cov_w * 1.5) end
     local cy = y + floor((h - cov_h) / 2)
     c:cover(b.fp, x, cy, cov_w, cov_h, { title = b.title, edge = tone.border or tone.bg })
+    -- a downloaded style can dress it, as on Continue reading
+    if A.packHas and A.packHas("bookCover") then
+        A.packCall("bookCover", c, x, cy, cov_w, cov_h, tone, { pct = A.clamp(b.pct or 0, 0, 1) })
+    end
     local tx = x + cov_w + px(18)
     local room = x + w - tx
     local days = (not env.sample) and D.dayOfBook(env.refresh, b.fp) or 4
-    local lines = {}
-    local t_k = c:text(T("Continue reading"), fpx(18), { bold = true, caps = true, color = tone.accent, max_w = room })
-    local t_title = c:textbox(b.title or "", fpx(26), room, 2, { bold = true, color = tone.fg })
-    if t_title.h > h * 0.42 then t_title = c:textbox(b.title or "", fpx(26), room, 1, { bold = true, color = tone.fg }) end
-    local t_author = b.author and c:text(b.author, fpx(20), { color = tone.muted, max_w = room }) or nil
     local pct = floor((b.pct or 0) * 100 + 0.5)
-    local t_pct = c:text(pct .. "%" .. (days and ("  \xC2\xB7  " .. A.plural(days, "day", "days")) or ""), fpx(20),
-        { bold = true, color = tone.fg, max_w = room })
-    local t_left = b.left_min and c:text(A.fmtMinutes(b.left_min) .. T(" left"), fpx(20), { bold = true, color = tone.label,
-        max_w = room }) or nil
-    local bar_h = max(4, px(9))
-    local gap = px(8)
+    local s_pct = pct .. "%" .. (days and ("  \xC2\xB7  " .. A.plural(days, "day", "days")) or "")
+    local s_left = b.left_min and (A.fmtMinutes(b.left_min) .. T(" left")) or nil
+    local t_k, t_title, t_author, t_pct, t_left, bar_h, gap
+    local lines = {}
     local function total()
         local sum = 0
-        for _, t in ipairs(lines) do sum = sum + (t == "bar" and bar_h or t.h) end
+        for _, t in ipairs(lines) do sum = sum + (t == "bar" and (bar_h + ((A.packHas and A.packHas("bar")) and floor(bar_h * 1.3) or 0)) or t.h) end
         return sum + (#lines - 1) * gap
     end
-    lines = { t_k, t_title, t_author or false, "bar", t_pct, t_left or false }
-    local function clean()
-        local out = {}
-        for _, t in ipairs(lines) do if t then out[#out + 1] = t end end
-        lines = out
+    -- the text grows with the card's height (f), each line only as far as
+    -- its width allows
+    local function line(str, n, f, opts)
+        local t = c:text(str, fpx(n), opts)
+        if f > 1 and t.w > 0 then
+            local g = max(1, min(f, room / t.w))
+            if g > 1.02 then t = c:text(str, fpx(n * g), opts) end
+        end
+        return t
     end
-    clean()
+    local function make(f)
+        t_k = line(T("Continue reading"), 18, f, { bold = true, caps = true, color = tone.accent, max_w = room })
+        t_title = c:textbox(b.title or "", fpx(26 * f), room, 2, { bold = true, color = tone.fg })
+        if t_title.h > h * 0.42 then t_title = c:textbox(b.title or "", fpx(26 * f), room, 1, { bold = true, color = tone.fg }) end
+        t_author = b.author and line(b.author, 20, f, { color = tone.muted, max_w = room }) or nil
+        t_pct = line(s_pct, 20, f, { bold = true, color = tone.fg, max_w = room })
+        t_left = s_left and line(s_left, 20, f, { bold = true, color = tone.label, max_w = room }) or nil
+        bar_h = max(4, px(9 * min(f, 1.6)))
+        -- (a style's own bar needs a little more room to draw in)
+        if A.packHas and A.packHas("bar") then bar_h = max(7, px(15 * min(f, 1.6))) end
+        gap = px(8 * f)
+        lines = {}
+        for _, t in ipairs{ t_k, t_title, t_author or false, "bar", t_pct, t_left or false } do
+            if t then lines[#lines + 1] = t end
+        end
+    end
+    make(1)
+    local f = A.clamp(h * 0.85 / max(1, total()), 1, 1.9)
+    if f > 1.05 then
+        make(f)
+        while f > 1 and total() > h * 0.92 do
+            f = max(1, f - 0.1)
+            make(f)
+        end
+    end
     -- drop what does not fit: the kicker, then the author, then time left
     for _, drop in ipairs{ t_k, t_author, t_left } do
         if total() <= h then break end
@@ -7392,12 +8373,15 @@ function MINI.reading(c, env, x, y, w, h, px, fpx, tone)
     local yy = y + max(0, floor((h - total()) / 2))
     for _, t in ipairs(lines) do
         if t == "bar" then
+            yy = yy + ((A.packHas and A.packHas("bar")) and floor(bar_h * 1.3) or 0) -- (room for what a style draws above its bar)
             local CYb = cyLook("continue_look", "hud")
             local ACb = not CYb and acLook("continue_look", "framed")
             if CYb then
                 CYb.segbar(c, tx, yy, room, bar_h, pct / 100, max(8, floor(room / px(22))), tone.accent, tone.track)
             elseif ACb then
                 ACb.inkLine(c, tx, yy, room, bar_h, pct / 100, tone)
+            elseif A.packBar and A.packBar(c, tx, yy, room, bar_h, A.clamp(pct / 100, 0, 1), tone, tone.accent) then
+                -- drawn by the style
             else
                 c:rrect(tx, yy, room, bar_h, bar_h / 2, tone.track)
                 if pct > 0 then c:rrect(tx, yy, max(bar_h, floor(room * pct / 100)), bar_h, bar_h / 2, tone.accent, tone.track) end
@@ -7421,7 +8405,7 @@ function MINI.today(c, env, x, y, w, h, px, fpx, tone)
     local st = statsFor(env)
     local cov_h = h
     local cov_w = floor(cov_h / 1.5)
-    if cov_w > w * 0.36 then cov_w = floor(w * 0.36); cov_h = floor(cov_w * 1.5) end
+    if cov_w > w * 0.4 then cov_w = floor(w * 0.4); cov_h = floor(cov_w * 1.5) end
     local CYh = cyLook("continue_look", "hud")
     local ACh = not CYh and acLook("continue_look", "framed")
     if CYh then
@@ -7433,17 +8417,9 @@ function MINI.today(c, env, x, y, w, h, px, fpx, tone)
     end
     local tx = x + cov_w + px(20)
     local room = x + w - tx
-    local gap = px(8)
-
-    -- the book
-    local t_title = c:textbox(b.title or "", fpx(26), room, 2, { bold = true, color = tone.fg })
-    if t_title.h > h * 0.3 then t_title = c:textbox(b.title or "", fpx(26), room, 1, { bold = true, color = tone.fg }) end
-    local t_author = b.author and c:text(b.author, fpx(20), { color = tone.muted, max_w = room }) or nil
     local pct = floor((b.pct or 0) * 100 + 0.5)
     local pct_str = pct .. "%"
     if b.left_min then pct_str = pct_str .. "  \xC2\xB7  " .. A.fmtMinutes(b.left_min) .. T(" left") end
-    local t_pct = c:text(pct_str, fpx(20), { bold = true, color = tone.label, max_w = room })
-    local bar_h = max(4, px(9))
 
     -- today: three small rings and what they count
     local pages = st and st.today.pages or 0
@@ -7454,36 +8430,76 @@ function MINI.today(c, env, x, y, w, h, px, fpx, tone)
         local c1, c2 = heartColors(tone)
         cols = { c1, c2, tone.series[3] }
     end
-    local f_fig = fpx(20)
     local figs = {
         { st and A.plural(pages, "page", "pages") or "\xE2\x80\xA6", cols[1] },
         { st and A.fmtMinutes(mins) or "\xE2\x80\xA6", cols[2] },
         { st and (streak > 0 and (T("Streak ") .. streak) or T("No streak")) or "\xE2\x80\xA6", cols[3] },
     }
-    local t_sep = c:text("  \xC2\xB7  ", f_fig, { bold = true, color = tone.label })
-    local ft = {}
-    for i, f in ipairs(figs) do ft[i] = c:text(f[1], f_fig, { bold = true, color = f[2] }) end
-    local dia = max(px(30), min(floor(h * 0.3), ft[1].h * 2))
-    local fx_room = room - dia - px(14)
-    -- the figures on one line when they fit, else two (pages and minutes, then the streak)
-    local one = ft[1].w + ft[2].w + ft[3].w + 2 * t_sep.w <= fx_room
-    if one and st then
-        -- "2 m read" when there is room for the word
-        local t_read = c:text(A.fmtMinutes(mins) .. T(" read"), f_fig, { bold = true, color = cols[2] })
-        if ft[1].w + t_read.w + ft[3].w + 2 * t_sep.w <= fx_room then ft[2] = t_read end
-    end
-    local row_h = max(dia, one and ft[1].h or (ft[1].h * 2))
 
-    local lines = { t_title, t_author or false, "bar", t_pct, "today" }
+    -- everything grows with the card's height (f); a line that would not
+    -- fit its width grows less
+    local t_title, t_author, t_pct, bar_h, gap, f_fig, t_sep, ft, dia, fx_room, one, row_h
+    local function line(str, n, f, opts)
+        local t = c:text(str, fpx(n), opts)
+        if f > 1 and t.w > 0 then
+            local g = max(1, min(f, room / t.w))
+            if g > 1.02 then t = c:text(str, fpx(n * g), opts) end
+        end
+        return t
+    end
+    local function make(f)
+        gap = px(8 * f)
+        -- the book
+        t_title = c:textbox(b.title or "", fpx(26 * f), room, 2, { bold = true, color = tone.fg })
+        if t_title.h > h * 0.3 then t_title = c:textbox(b.title or "", fpx(26 * f), room, 1, { bold = true, color = tone.fg }) end
+        t_author = b.author and line(b.author, 20, f, { color = tone.muted, max_w = room }) or nil
+        t_pct = line(pct_str, 20, f, { bold = true, color = tone.label, max_w = room })
+        bar_h = max(4, px(9 * min(f, 1.6)))
+        -- today's figures beside small rings; they grow less when pages
+        -- and minutes would no longer share a line
+        local ff = f
+        while true do
+            f_fig = fpx(20 * ff)
+            t_sep = c:text("  \xC2\xB7  ", f_fig, { bold = true, color = tone.label })
+            ft = {}
+            for k, fg in ipairs(figs) do ft[k] = c:text(fg[1], f_fig, { bold = true, color = fg[2] }) end
+            dia = max(px(30 * ff), min(floor(h * 0.3), ft[1].h * 2))
+            fx_room = room - dia - px(14)
+            if ff <= 1 or ft[1].w + t_sep.w + ft[2].w <= fx_room then break end
+            ff = max(1, ff - 0.1)
+        end
+        -- the figures on one line when they fit, else two (pages and minutes, then the streak)
+        one = ft[1].w + ft[2].w + ft[3].w + 2 * t_sep.w <= fx_room
+        if one and st then
+            -- "2 m read" when there is room for the word
+            local t_read = c:text(A.fmtMinutes(mins) .. T(" read"), f_fig, { bold = true, color = cols[2] })
+            if ft[1].w + t_read.w + ft[3].w + 2 * t_sep.w <= fx_room then ft[2] = t_read end
+        end
+        row_h = max(dia, one and ft[1].h or (ft[1].h * 2))
+    end
+
+    local lines = { false, false, "bar", false, "today" }
     local function size(list)
         local sum, n = 0, 0
         for _, t in ipairs(list) do
             if t then
                 n = n + 1
-                sum = sum + ((t == "bar") and bar_h or (t == "today") and row_h or t.h)
+                sum = sum + ((t == "bar") and (bar_h + ((A.packHas and A.packHas("bar")) and floor(bar_h * 1.3) or 0)) or (t == "today") and row_h or t.h)
             end
         end
         return sum + (n - 1) * gap
+    end
+    local function fill()
+        lines[1], lines[2], lines[4] = t_title, t_author or false, t_pct
+    end
+    make(1); fill()
+    local f = A.clamp(h * 0.85 / max(1, size(lines)), 1, 1.8)
+    if f > 1.05 then
+        make(f); fill()
+        while f > 1 and size(lines) > h * 0.92 do
+            f = max(1, f - 0.1)
+            make(f); fill()
+        end
     end
     -- too tall: the author goes first, then the time left
     if size(lines) > h then lines[2] = false end
@@ -7492,12 +8508,15 @@ function MINI.today(c, env, x, y, w, h, px, fpx, tone)
     local row_y
     for _, t in ipairs(lines) do
         if t == "bar" then
+            yy = yy + ((A.packHas and A.packHas("bar")) and floor(bar_h * 1.3) or 0) -- (room for what a style draws above its bar)
             local CYb = cyLook("continue_look", "hud")
             local ACb = not CYb and acLook("continue_look", "framed")
             if CYb then
                 CYb.segbar(c, tx, yy, room, bar_h, pct / 100, max(8, floor(room / px(22))), tone.accent, tone.track)
             elseif ACb then
                 ACb.inkLine(c, tx, yy, room, bar_h, pct / 100, tone)
+            elseif A.packBar and A.packBar(c, tx, yy, room, bar_h, A.clamp(pct / 100, 0, 1), tone, tone.accent) then
+                -- drawn by the style
             else
                 c:rrect(tx, yy, room, bar_h, bar_h / 2, tone.track)
                 if pct > 0 then c:rrect(tx, yy, max(bar_h, floor(room * pct / 100)), bar_h, bar_h / 2, tone.accent, tone.track) end
@@ -7646,7 +8665,10 @@ function MINI.week(c, env, x, y, w, h, px, fpx, tone)
             color = day.today and tone.accent or tone.label })
         local fp = day.future and 0 or day.pages / page_goal
         local fm = day.future and 0 or (day.secs / 60) / min_goal
-        if hearts() then
+        if A.packHas and A.packHas("day") and A.packCall("day", c, cx, cy, d, fp, fm, tone,
+                { future = day.future, today = day.today, past = not day.future and not day.today, small = true }) then
+            -- a downloaded style's own day (stylepacks.lua)
+        elseif hearts() then
             dayHeart(c, cx, cy, d, tone, fp, fm, { future = day.future, past = not day.future and not day.today,
                 single = d < 26 })
         else
@@ -7694,7 +8716,10 @@ function MINI.weekrow(c, env, x, y, w, h, px, fpx, tone)
             color = day.today and tone.accent or tone.label })
         local fp = day.future and 0 or day.pages / page_goal
         local fm = day.future and 0 or (day.secs / 60) / min_goal
-        if hearts() then
+        if A.packHas and A.packHas("day") and A.packCall("day", c, cx, cy, d, fp, fm, tone,
+                { future = day.future, today = day.today, past = not day.future and not day.today, small = true }) then
+            -- a downloaded style's own day (stylepacks.lua)
+        elseif hearts() then
             dayHeart(c, cx, cy, d, tone, fp, fm, { future = day.future, past = not day.future and not day.today, single = d < 26 })
         else
             local c1, c2 = cols[1], cols[2]
@@ -7716,7 +8741,13 @@ function MINI.challenge(c, env, x, y, w, h, px, fpx, tone)
     local flower = flowerOn()
     local pct = floor(ch.frac * 100 + 0.5)
     local ACc
-    if flower then
+    -- a downloaded style's own centrepiece, as on the full card
+    local packed = not flower and not (cyLook("challenge_style", "reticle") or cyLook("challenge_style", "neural")
+        or acLook("challenge_style", "hourglass") or acLook("challenge_style", "chess"))
+        and A.packChallenge and A.packChallenge(c, cx, cy, R, min(1, ch.frac), tone, col)
+    if packed then
+        ACc = true -- (the percentage goes with the text beside it)
+    elseif flower then
         local look
         look, col = flowerLook(tone)
         look.frac = ch.frac
@@ -7777,11 +8808,18 @@ function MINI.goal(c, env, x, y, w, h, px, fpx, tone)
     local target, other = D.yearGoal()
     if env.sample then target, other = 36, 0 end
     local done = (yr and yr.total or 0) + other
-    if jarOn() then
+    -- the jar, or a downloaded style's own picture in its place
+    local PG = not jarOn() and not (cyLook("goal_look", "terminal") or cyLook("goal_look", "shards")
+        or acLook("goal_look", "globe")) and A.packHas and A.packHas("goal")
+    if jarOn() or PG then
         local jh = h
-        local jw = min(floor(jh * 0.72), floor(w * 0.4))
-        jh = floor(jw / 0.72)
-        drawJar(c, x, y + floor((h - jh) / 2), jw, jh, done, target, px, jarLook(tone))
+        local jw = min(floor(jh * (PG and 0.8 or 0.72)), floor(w * 0.4))
+        jh = floor(jw / (PG and 0.8 or 0.72))
+        if PG then
+            A.packCall("goal", c, x, y + floor((h - jh) / 2), jw, jh, done, target, tone)
+        else
+            drawJar(c, x, y + floor((h - jh) / 2), jw, jh, done, target, px, jarLook(tone))
+        end
         local tx = x + jw + px(16)
         local room = x + w - tx
         local t_n = c:text(tostring(done), fpx(56), { bold = true, color = tone.fg, max_w = room })
@@ -7919,7 +8957,13 @@ function MINI.coverweek(c, env, x, y, w, h, px, fpx, tone)
         { compact = true, time = false, prefix = "coverweek:" })
 end
 
+-- Tiles with a set shape (a row of days, a strip): how tall they are for
+-- their width, at most. They sit in the middle of a taller space rather
+-- than at its top. The others fill what they're given.
+P.mini.TALL = { week = 0.42, compare = 0.55, timeline = 0.5, coverweek = 0.5 }
+
 function P.mini.build(env)
+    local MINI_TALL = P.mini.TALL
     local w, h, tone = env.w, env.h, env.tone
     local s = A.clamp(min(h / 300, w / 1100), 0.5, 1.2)
     local px, fpx = scaler(s, env.ts)
@@ -7929,7 +8973,47 @@ function P.mini.build(env)
     local W, Hh = w - 2 * pad, h - 2 * pad
     local gap = px(36)
     local sc = A.screen()
-    -- as many as fit, in order
+    local function draw(k, x, y, tw, th)
+        local cap = MINI_TALL[k] and floor(tw * MINI_TALL[k] + px(40)) or nil
+        if cap and th > cap then
+            y = y + floor((th - cap) / 2)
+            th = cap
+        end
+        local ok, err = pcall(MINI[k], c, env, x, y, tw, th, px, fpx, tone)
+        if not ok then A.log("mini", k, err) end
+    end
+    -- Stacked: the first card on the left, the others on top of each other
+    -- on the right, when it's tall enough for that (or asked for)
+    local layout = env.cfg("layout", "auto")
+    local vgap = px(24)
+    local min_h = px(130)
+    if #kinds >= 3 and layout ~= "row" and (layout == "stack" or Hh >= 2 * min_h + vgap + px(60)) then
+        local right = {}
+        for i = 2, #kinds do right[#right + 1] = kinds[i] end
+        while #right > 1 and (#right * min_h + (#right - 1) * vgap) > Hh do table.remove(right) end
+        local wr = 0
+        local need_r = 0
+        for _, k in ipairs(right) do
+            wr = max(wr, MINI_WEIGHT[k])
+            need_r = max(need_r, sc:scaleBySize(MINI_MIN[k]))
+        end
+        local w1 = MINI_WEIGHT[kinds[1]]
+        local lw = floor((W - gap) * w1 / (w1 + wr))
+        if lw >= sc:scaleBySize(MINI_MIN[kinds[1]]) and (W - gap - lw) >= need_r then
+            draw(kinds[1], pad, pad, lw, Hh)
+            local rx, rw = pad + lw + gap, W - gap - lw
+            c:rect(rx - floor(gap / 2), pad + px(8), max(1, px(2)), Hh - px(16), tone.track)
+            local th = floor((Hh - (#right - 1) * vgap) / #right)
+            local y = pad
+            for i, k in ipairs(right) do
+                if i > 1 then c:rect(rx + px(8), y - floor(vgap / 2), rw - px(16), max(1, px(2)), tone.track) end
+                draw(k, rx, y, rw, (i == #right) and (pad + Hh - y) or th)
+                y = y + th + vgap
+            end
+            return c
+        end
+    end
+    -- Side by side: as many as fit, in order
     while #kinds > 1 do
         local need = (#kinds - 1) * gap
         for _, k in ipairs(kinds) do need = need + sc:scaleBySize(MINI_MIN[k]) end
@@ -7943,8 +9027,7 @@ function P.mini.build(env)
     for i, k in ipairs(kinds) do
         local tw = (i == #kinds) and (pad + W - x) or floor(avail * MINI_WEIGHT[k] / total)
         if i > 1 then c:rect(x - floor(gap / 2), pad + px(8), max(1, px(2)), Hh - px(16), tone.track) end
-        local ok, err = pcall(MINI[k], c, env, x, pad, tw, Hh, px, fpx, tone)
-        if not ok then A.log("mini", k, err) end
+        draw(k, x, pad, tw, Hh)
         x = x + tw + gap
     end
     return c

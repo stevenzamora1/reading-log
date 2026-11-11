@@ -1323,14 +1323,14 @@ end
 -- ════════════════════════════════════════════════════════════════════════════
 -- Lifetime pages: the Pages turned figures as a card, for the Dashboard
 -- ════════════════════════════════════════════════════════════════════════════
--- Every page turned in big figures, how many a day on average since the
--- first, a bar to the next round number, and this year's, this month's and
--- this week's pages beside it. A look for every style.
+-- Every page turned in big figures, and this year's, this month's and this
+-- week's pages beside it (each can be left off in the card's settings). A
+-- look for every style.
 
 P.total_pages = {
     does = T("opens reading progress"),
     title = T("Lifetime pages"), tone = "ink", ratio = 0.5, ratio_narrow = 0.8,
-    summary = T("Every page you've ever turned in KOReader, with this year's, this month's and this week's, and the next round number. Needs the statistics plugin."),
+    summary = T("Every page you've ever turned in KOReader, with this year's, this month's and this week's if you like. Needs the statistics plugin."),
     poll = function()
         local all = D.pagesTurned()
         return tostring(type(all) == "table" and all.pages)
@@ -1369,7 +1369,7 @@ function P.total_pages.build(env)
     end
     local n = type(all) == "table" and all.pages or nil
     local num = n and A.thousands(n) or "\xE2\x80\xA6"
-    -- since when, and a day on average since then
+    -- since when
     local first_t
     if type(all) == "table" and all.first then
         local y, mo, d = A.parseYmd(all.first)
@@ -1380,77 +1380,48 @@ function P.total_pages.build(env)
         local t_s = c:text(since, fpx(17), { color = tone.muted, serif = serif, italic = serif })
         if t_head.w + t_s.w + px(20) <= w - 2 * pad then c:put(t_s, w - pad, px(22) + t_head.base, "r", "base") end
     end
-    local avg
-    if n and first_t then
-        local days = max(1, floor((os.time() - first_t) / 86400 + 0.5) + 1)
-        avg = floor(n / days + 0.5)
-    end
-    local nxt = milestone(n or 0)
-    local frac = n and n / nxt or 0
-
     local top = px(22) + t_head.h + px(12)
     local bx, by, bw, bh = pad, top, w - 2 * pad, h - top - px(20)
     if bw < 40 or bh < 30 then return c end
-    -- the figures' block, and the rows' box beside it (or under it)
-    local lw = tall and bw or floor(bw * 0.56)
-    -- (the name, its short form for a narrow card, the Cyber code, the figure)
-    local rows = {
-        { T("This year"), T("Year"), "YEAR", yr and yr.pages },
-        { T("This month"), T("Month"), "MONTH", st and st.month_pages and st.month_pages[tonumber(os.date("%m"))] },
-        { T("This week"), T("Week"), "WEEK", st and st.week_pages },
+    -- (the name, its short form for a narrow card, the Cyber code, the figure),
+    -- the ones not switched off in the card's settings
+    local rows = {}
+    local all_rows = {
+        { T("This year"), T("Year"), "YEAR", yr and yr.pages, "year" },
+        { T("This month"), T("Month"), "MONTH", st and st.month_pages and st.month_pages[tonumber(os.date("%m"))], "month" },
+        { T("This week"), T("Week"), "WEEK", st and st.week_pages, "week" },
     }
+    for _, r in ipairs(all_rows) do
+        if env.cfg("show_" .. r[5], "on") ~= "off" then rows[#rows + 1] = r end
+    end
+    -- the figures' block, and the rows' box beside it (or under it); with
+    -- no rows the figures have the card
+    local lw = (tall or #rows == 0) and bw or floor(bw * 0.56)
 
     -- the big figures
     local function bigNumber(x, y, maxw, maxh)
+        -- as big as the room allows (bigger with no rows beside it), centred
+        -- in the height it has
+        local start = fpx(#rows == 0 and 96 or 66)
         if look == "counter" then
             -- in white, glitched cyan and red, like the Cyber clock
-            local t_n = fitText(c, num, fpx(66), maxw, { bold = true }, maxh)
-            kit.glitch(c, num, t_n.px, x - floor(t_n.px * 0.03), y, { color = tone.fg })
+            local t_n = fitText(c, num, start, maxw, { bold = true }, maxh)
+            kit.glitch(c, num, t_n.px, x - floor(t_n.px * 0.03), y + max(0, floor((maxh - t_n.h) / 2)), { color = tone.fg })
             return t_n.h
         end
         local col = tone.fg
         if look == "worm" then col = (A.cozyHeart(tone)) end
-        local t_n = fitText(c, num, fpx(66), maxw, { bold = true, serif = serif, color = col }, maxh)
-        c:put(t_n, x, y)
+        local t_n = fitText(c, num, start, maxw, { bold = true, serif = serif, color = col }, maxh)
+        local ty = y + max(0, floor((maxh - t_n.h) / 2))
+        c:put(t_n, x, ty)
         if look == "ledger" then
             -- a double gilt rule under the figures
             local AC = kit
-            local ry = y + t_n.base + max(2, px(5))
+            local ry = ty + t_n.base + max(2, px(5))
             c:rect(x, ry, t_n.w, max(1, px(2)), AC.GOLD)
             c:rect(x, ry + max(3, px(5)), floor(t_n.w * 0.6), 1, AC.GOLD)
         end
         return t_n.h
-    end
-
-    -- the bar to the next round number
-    local function bar(x, y, bw2, bh2)
-        if look == "counter" then
-            kit.segbar(c, x, y, bw2, bh2, frac, A.clamp(floor(bw2 / max(6, px(14))), 8, 24), tone.accent, A.mix(tone.bg, tone.fg, 0.16))
-        elseif look == "worm" then
-            -- ten hearts that fill up like glasses
-            local k = 10
-            local hs = min(floor(bw2 / k * 0.82), bh2 * 2)
-            local step = (bw2 - hs) / (k - 1)
-            local fill, line = A.cozyHeart(tone)
-            for i = 1, k do
-                local f = A.clamp(frac * k - (i - 1), 0, 1)
-                c:heart(x + hs / 2 + (i - 1) * step, y + bh2 / 2, hs, hs * 0.92, { outer = f, line = line, fill = fill,
-                    track = A.mix(tone.bg, fill, 0.18), t = max(1, floor(hs * 0.1)) })
-            end
-        elseif look == "ledger" then
-            local AC = kit
-            local mid = y + floor(bh2 / 2)
-            c:rect(x, mid, bw2, 1, A.mix(tone.bg, AC.GOLD, 0.5))
-            local fw = floor(bw2 * frac)
-            if fw > 0 then c:rect(x, mid - max(1, floor(bh2 / 4)), fw, max(2, floor(bh2 / 2)), AC.GOLD) end
-            local r = max(3, floor(bh2 * 0.6))
-            local cx = x + fw
-            AC.poly(c, { cx, mid - r, cx + r, mid, cx, mid + r, cx - r, mid }, AC.GOLD_DARK)
-        else
-            c:rrect(x, y, bw2, bh2, bh2 / 2, tone.track)
-            local fw = floor(bw2 * frac)
-            if fw > 0 then c:rrect(x, y, max(bh2, fw), bh2, bh2 / 2, tone.accent) end
-        end
     end
 
     -- one of the period rows
@@ -1503,32 +1474,14 @@ function P.total_pages.build(env)
         if i > 1 then c:rect(x, y, rw, 1, tone.track) end
     end
 
-    -- the figures' block: the number, a day on average, the bar, what's to go
-    local o_small = { color = tone.muted, serif = serif, mono = (look == "counter") or nil }
-    local t_avg = avg and fitText(c, A.tr("%1 a day on average", A.thousands(avg)), fpx(18), lw, o_small) or nil
-    local togo = n and A.tr("%1 to go to %2", A.thousands(nxt - n), A.thousands(nxt)) or nil
-    local t_go = togo and fitText(c, togo, fpx(16), lw, { color = tone.label or tone.muted, serif = serif,
-        mono = (look == "counter") or nil }) or nil
-    local bar_h = look == "worm" and max(10, px(18)) or max(4, px(look == "ledger" and 10 or 9))
-    local small_h = (t_avg and t_avg.h or 0) + px(8) + bar_h + px(6) + (t_go and t_go.h or 0)
+    -- the figures' block: the number
     local rows_h = 0
     local row_h = max(px(34), c:text("Ag", fpx(22)).h + px(10))
-    if tall then rows_h = min(3, max(0, floor((bh * 0.56) / row_h))) * row_h end
-    local num_room = (tall and (bh - rows_h - px(10)) or bh) - small_h
-    if num_room < c:text("0", fpx(44), { bold = true }).h then
-        -- short: no average line
-        small_h = small_h - (t_avg and (t_avg.h + px(8)) or 0)
-        t_avg = nil
-        num_room = (tall and (bh - rows_h - px(10)) or bh) - small_h
-    end
-    local num_h = min(num_room, px(90))
-    local block_h = num_h + small_h
-    local yy = by + floor(((tall and (bh - rows_h - px(10)) or bh) - block_h) / 2)
-    local used = bigNumber(bx, yy, lw, num_h)
-    yy = yy + min(used, num_h) + px(4)
-    if t_avg then c:put(t_avg, bx, yy); yy = yy + t_avg.h + px(8) end
-    bar(bx, yy, lw, bar_h); yy = yy + bar_h + px(6)
-    if t_go then c:put(t_go, bx, yy) end
+    if tall and #rows > 0 then rows_h = min(#rows, max(0, floor((bh * 0.56) / row_h))) * row_h end
+    local block_room = (tall and rows_h > 0) and (bh - rows_h - px(10)) or bh
+    local num_h = min(block_room, px(#rows == 0 and 120 or 96))
+    local yy = by + floor((block_room - num_h) / 2)
+    bigNumber(bx, yy, lw, num_h)
 
     -- the rows
     local rx, ry, rw, rh
@@ -1538,6 +1491,7 @@ function P.total_pages.build(env)
         rx, rw = bx + lw + px(30), bw - lw - px(30)
         ry, rh = by, bh
     end
+    if #rows == 0 then return c end
     local nrows = min(#rows, floor(rh / row_h))
     -- the short names for every row when a full one leaves its figure too
     -- little room (with the pills' own padding)

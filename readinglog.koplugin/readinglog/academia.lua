@@ -404,9 +404,10 @@ function AC.watchRing(c, cx, cy, R, t, frac, track, fill, tone)
     end
     frac = A.clamp(tonumber(frac) or 0, 0, 1)
     local small = w.R < 40
-    -- the band: the covered part of the face, washed in the ring's colour
-    -- (stronger on the small faces of the Week and Month cards)
-    local col = A.mix(FACE, fill, small and 0.62 or 0.38)
+    -- the band: the covered part of the face in the ring's colour, nearly
+    -- full strength (a touch lighter on the big face, so its numerals and
+    -- ticks still read over it)
+    local col = A.mix(FACE, fill, small and 0.95 or 0.82)
     local ro, bt = R * SCALE, max(1.5, t * SCALE * 0.9)
     if frac > 0 then
         local inv = c.inv

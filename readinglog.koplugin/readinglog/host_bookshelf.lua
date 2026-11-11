@@ -381,11 +381,28 @@ function H.repaint(ctx)
     if type(ctx) == "table" and ctx.menu and ctx.menu._reload then pcall(ctx.menu._reload, ctx.menu) end
 end
 
+-- Bookshelf's view on screen (for a change made away from any card: the
+-- Tools menu's Get more styles...), or nil.
+local function liveShelf()
+    local UIManager = require("ui/uimanager")
+    local stack = UIManager._window_stack
+    if type(stack) ~= "table" then return nil end
+    for i = #stack, 1, -1 do
+        local w = stack[i] and stack[i].widget
+        if type(w) == "table" and w.name == "bookshelf" and (w._swapMicroHeroInPlace or w._rebuild) then return w end
+    end
+end
+
 --- Redraw every card (a theme or accent changed): in the top panel or the
 --- full-screen view that means rebuilding them; the start menu's own reload
 --- already redraws the whole menu.
 function H.redrawAll(ctx)
-    if type(ctx) ~= "table" then return end
+    if type(ctx) ~= "table" then
+        local bw = liveShelf()
+        local HeroModules = bw and try("lib/bookshelf_hero_modules")
+        if HeroModules and HeroModules._rebuild then pcall(HeroModules._rebuild, bw) end
+        return
+    end
     local bw = ctx.bw
     if bw and (ctx.surface == "hero" or ctx.surface == "fullscreen") then
         local HeroModules = try("lib/bookshelf_hero_modules")

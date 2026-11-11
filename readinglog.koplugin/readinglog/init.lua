@@ -24,11 +24,13 @@ Parts, each loaded once and attached to the same table:
   store.lua     the settings file, shared by both apps
   host*.lua     the app adapter (see above)
   data.lua      reading stats, book lists, covers
+  pubdates.lua  when each book was published (read from the files), for Decades
   panels.lua    one builder per card (banner, continue reading, rings, ...)
   settings.lua  each card's options, and the dialogs (page editor, picks)
   modules.lua   Simple UI: turns each panel into a Simple UI module; the dashboard
   menus.lua     Simple UI: the options as settings menu items
   bookshelf.lua Bookshelf: turns each panel into a micro-module spec; the dashboard
+  ownscreen.lua the full-screen dashboard and ZenOS's Home widgets (not Bookshelf)
 
 Why modules paint their own card: each card has its own colour, so it fills
 its box with a rounded panel and draws on that.
@@ -37,7 +39,7 @@ its box with a rounded panel and draws on that.
 local HOST_KIND = ...
 if HOST_KIND ~= "bookshelf" then HOST_KIND = "simpleui" end
 
-local A = { VERSION = "1.4.0", NAME = "Reading Log" }
+local A = { VERSION = "1.5.0", NAME = "Reading Log" }
 A.HOST_KIND = HOST_KIND
 A.HOST = HOST_KIND == "bookshelf" and "Bookshelf" or "Simple UI"
 
@@ -206,7 +208,7 @@ function A.accentIds()
     local a = A.get("accent", nil)
     if not A.ACCENTS[a] then a = th.accent end
     local b = A.get("accent2", nil)
-    if not A.ACCENTS[b] then b = A.ACCENTS[a].pair end
+    if not A.ACCENTS[b] then b = (a == th.accent and th.accent2) or A.ACCENTS[a].pair end
     return a, b
 end
 
@@ -349,15 +351,29 @@ end
 -- PAINT (night mode already allowed for): bg, fg, whether it will look dark,
 -- an accent for headings, and `look` = the page colour as it should look when
 -- the theme sets one (nil when the page is the app's own background).
-function A.dashPage()
+function A.dashPage(full)
     local th = A.theme()
-    if th.page then
+    -- (the reader can keep the style's cards on the home screen's own page;
+    -- full screen there's no home screen behind, so the style's it is)
+    local own = A.THEMES[A.themeId()] and A.THEMES[A.themeId()].own
+    if th.page and (full or A._full_render or not own or A.get("style_page", "style") ~= "home") then
         local dark = A.luma(th.page) < 128
         return A.shown(th.page), A.shown(th.page_fg), dark, A.shown(dark and th.gold or th.wine), th.page
     end
     local bg, fg = A.pageColors()
     local dark = A.pageLooksDark()
     return bg, fg, dark, A.shown(dark and th.gold or A.mix(th.gold, { 0, 0, 0 }, 0.42)), nil
+end
+
+--- The colours of what sits on a plate over a Simple UI wallpaper (the
+--- banner, a page's title and its month buttons, the tabs): the page's, or,
+--- when the page is the home screen's own, the style's cards', so they
+--- change with the style like the cards do.
+function A.plateColours()
+    local bg, fg, dark, accent, look = A.dashPage()
+    if look or not (A.THEMES[A.themeId()] and A.THEMES[A.themeId()].own) then return bg, fg, dark, accent end
+    local t = A.tone("ink")
+    return t.bg, t.fg, t.dark and true or false, t.accent
 end
 
 -- ─── colours → Blitbuffer ────────────────────────────────────────────────────
@@ -2400,12 +2416,18 @@ part(HOST_KIND == "bookshelf" and "host_bookshelf" or "host")
 -- English day and month names from KOReader's own translations (see i18n.lua)
 A.i18n.localize = A.host.localizeDate
 part("data")
+-- publication years, for the Decades card
+part("pubdates")
 part("panels")
 -- the ornaments (no card): Books this year, Streak flame, Letter board,
 -- Today's pages
 part("ornaments")
 part("settings")
+-- styles you can download (settings/readinglog/styles)
+part("stylepacks")
 part(HOST_KIND == "bookshelf" and "bookshelf" or "modules")
+-- Reading Log's own windows: the full-screen dashboard and ZenOS's widgets
+if HOST_KIND ~= "bookshelf" then part("ownscreen") end
 
 -- The Cyber look's drawing lives in cyber.lua, read the first time a card
 -- asks for it: a Dashboard that never uses Cyber never loads it.

@@ -39,6 +39,7 @@ end
 -- recomputes in the background, then calls every waiting refresh once.
 
 local _slots = {}
+D._slots = _slots  -- (for the tests)
 
 -- o.ttl   seconds a result stays fresh (default 60)
 -- o.key   optional function: the result is also stale once key() changes
@@ -70,6 +71,23 @@ end
 D.wall = wall
 function D.hurry(secs) D._hurry_until = wall() + (secs or 0.3) end
 
+--- Work out these figures ahead, one at a time while the screen is idle, so
+--- the pages that need them open at once (the full-screen dashboard calls it
+--- after it opens). Ones already worked out are skipped.
+function D.warm(names, gap)
+    local UIManager = require("ui/uimanager")
+    local i = 0
+    local function step()
+        i = i + 1
+        local name = names[i]
+        if not name then return end
+        local s = _slots[name]
+        if s and s.get and not s.busy then pcall(s.get, nil, true) end
+        UIManager:scheduleIn(gap or 0.5, step)
+    end
+    UIManager:scheduleIn(gap or 0.5, step)
+end
+
 local function deferred(name, o, compute)
     local s = { at = 0, value = nil, busy = false, waiters = {}, key = nil, sig = nil, sticky = o.sticky, cost = nil }
     _slots[name] = s
@@ -91,7 +109,7 @@ local function deferred(name, o, compute)
         s.sig = sig
         return changed
     end
-    return function(refresh, sync)
+    local function get(refresh, sync)
         if fresh() then return s.value end
         if sync then run() return s.value end
         local until_ = D._hurry_until
@@ -123,6 +141,8 @@ local function deferred(name, o, compute)
         end
         return s.value
     end
+    s.get = get
+    return get
 end
 
 -- Drop everything cached (after a setting changed, or on request).
@@ -319,6 +339,55 @@ end
 -- date_finished, else summary.modified); the date it was last opened stands
 -- in when there is none.
 
+-- ─── dates you set by hand ──────────────────────────────────────────────────
+-- Tools > Reading Log > Change a book's dates: when you started a book and
+-- when you finished it, for when the statistics or the home screen have it
+-- wrong. Kept in Reading Log's settings by file (book_dates); a finish date
+-- set here makes the book count as finished on that day, whatever "a book
+-- counts as finished when" says, and goes into the book's own settings file
+-- too when it is marked finished, so Simple UI shows the same date.
+
+local function bookDatesAll()
+    local v = A.get("book_dates", nil)
+    return type(v) == "table" and v or {}
+end
+
+--- { start = "YYYY-MM-DD" | nil, finish = "YYYY-MM-DD" | nil } for a book.
+function D.bookDates(fp)
+    local e = bookDatesAll()[fp]
+    if type(e) ~= "table" then return {} end
+    return { start = type(e.start) == "string" and e.start or nil, finish = type(e.finish) == "string" and e.finish or nil }
+end
+
+--- Set (or clear, with nil) a book's start and finish dates.
+function D.setBookDates(fp, start, finish)
+    local all = {}
+    for k, v in pairs(bookDatesAll()) do all[k] = v end
+    if start or finish then all[fp] = { start = start, finish = finish } else all[fp] = nil end
+    A.set("book_dates", next(all) and all or nil)
+    -- the book's own settings file: its finish date, when it is marked finished
+    if finish then
+        pcall(function()
+            local ds = require("docsettings"):open(fp)
+            local summary = ds:readSetting("summary")
+            if type(summary) == "table" and summary.status == "complete" and summary.date_finished ~= finish then
+                summary.date_finished = finish
+                ds:saveSetting("summary", summary)
+                ds:flush()
+            end
+        end)
+    end
+    D.invalidate()
+    if _slots.lengths then _slots.lengths.at = 0 end
+    if _slots.started then _slots.started.at = 0 end
+end
+
+local function ymdParts(s)
+    local y, m, d = tostring(s or ""):match("^(%d+)%-(%d+)%-(%d+)")
+    return tonumber(y), tonumber(m), tonumber(d)
+end
+D.ymdParts = ymdParts
+
 -- The first month the Monthly page can go back to: twelve before this one.
 local BACK_MONTHS = 12
 D.BACK_MONTHS = BACK_MONTHS
@@ -326,8 +395,10 @@ D.BACK_MONTHS = BACK_MONTHS
 local function ymKey(y, m) return string.format("%04d-%02d", y, m) end
 D.ymKey = ymKey
 
-local function computeYear()
+local function computeYear(want_year)
     local t = os.date("*t")
+    -- a year gone by (the Yearly page's year switcher): as seen on its last day
+    if want_year and want_year ~= t.year then t = { year = want_year, month = 12, day = 31 } end
     local year_start = os.time{ year = t.year, month = 1, day = 1, hour = 0, min = 0, sec = 0 }
     local back_start = os.time{ year = t.year, month = t.month - BACK_MONTHS, day = 1, hour = 0, min = 0, sec = 0 }
     local since = math.min(year_start, back_start)
@@ -350,8 +421,16 @@ local function computeYear()
     -- finished again (say, a page turn past the end after reopening it). The
     -- date is pulled back to the last day of real reading on or before it.
     local fixer = D.finishFixer and D.finishFixer() or nil
+    local overrides = bookDatesAll()
+    local added = {}
     local function add(fp, y, m, d, skip_count)
-        if y and m and fixer then
+        if added[fp] then return end
+        local o = overrides[fp]
+        local oy, om, od = ymdParts(type(o) == "table" and o.finish)
+        if oy then
+            -- a finish date set by hand: as it is
+            y, m, d = oy, om, od
+        elseif y and m and fixer then
             local fy, fm, fd = fixer.fix(fp, y, m, d or 1)
             if fy then y, m, d = fy, fm, fd end
         end
@@ -359,6 +438,7 @@ local function computeYear()
             if y == t.year and not skip_count then extra = extra + 1 end
             return
         end
+        added[fp] = true
         -- outside both this year and the months the Monthly page goes back to
         if y ~= t.year and ymKey(y, m) < first_key then return end
         local info = D.info(fp)
@@ -378,8 +458,67 @@ local function computeYear()
         end
     end
 
+    local by = D.finishedBy()
     local ok_l, ledger = pcall(A.host.finishedBooks)
-    if ok_l and type(ledger) == "table" then
+    -- read to the end (from the statistics): fp -> its time, for "read" and
+    -- "either"; books whose file is gone count towards the year
+    local ends
+    if by ~= "marked" then
+        local ok_e, list = pcall(D.readToEnd)
+        if ok_e and type(list) == "table" then
+            ends = {}
+            for _, e in ipairs(list) do
+                if e.fp then
+                    ends[e.fp] = e.time
+                elseif os.date("*t", e.time).year == t.year then
+                    extra = extra + 1
+                end
+            end
+        end
+    end
+    if ends then
+        local marked = {}
+        if by == "either" and ok_l and type(ledger) == "table" then
+            for _, b in ipairs(ledger.books or {}) do marked[b.fp] = b end
+        elseif by == "either" then
+            -- without a ledger: the books marked finished in the history
+            for _, entry in ipairs(history()) do
+                local fp = entry.file
+                if fp and not marked[fp] and (entry.time or 0) >= since then
+                    local _, status = D.progress(fp)
+                    if status == "finished" then
+                        local y, m, d = ymOf(D.finishedOn(fp))
+                        marked[fp] = { fp = fp, y = y, m = m, d = d }
+                    end
+                end
+            end
+        end
+        local first_year = tonumber(first_key:sub(1, 4))
+        local saved = fixer
+        fixer = nil   -- these dates come from the statistics: nothing to fix
+        for fp, at in pairs(ends) do
+            local et = os.date("*t", at)
+            local mb = marked[fp]
+            if et.year >= first_year then add(fp, et.year, et.month, et.day, mb and mb.excluded) end
+            marked[fp] = nil
+        end
+        fixer = saved
+        -- marked finished, but not read to the end in the statistics
+        for fp, b in pairs(marked) do
+            local y, m, d = b.y, b.m, b.d
+            if y and not m then
+                local at = opened_at[fp]
+                if at and at > 0 then
+                    local et = os.date("*t", at)
+                    if et.year == y then m, d = et.month, et.day end
+                end
+            end
+            if y and y >= first_year then add(fp, y, m, d, b.excluded) end
+        end
+        if ok_l and type(ledger) == "table" then
+            extra = extra + (tonumber((ledger.extra or {})[t.year]) or 0)
+        end
+    elseif ok_l and type(ledger) == "table" then
         local first_year = tonumber(first_key:sub(1, 4))
         for _, b in ipairs(ledger.books or {}) do
             local y, m, d = b.y, b.m, b.d
@@ -411,6 +550,13 @@ local function computeYear()
                     add(fp, y, m, d)
                 end
             end
+        end
+    end
+    -- books given a finish date by hand that weren't counted otherwise
+    for fp, o in pairs(overrides) do
+        if not added[fp] and type(o) == "table" and o.finish and D.fileExists(fp) then
+            local oy, om, od = ymdParts(o.finish)
+            if oy then add(fp, oy, om, od) end
         end
     end
     if fixer then fixer.close() end
@@ -461,6 +607,46 @@ D.year = deferred("year", {
         return table.concat(parts, ",")
     end,
 }, computeYear)
+
+-- A year gone by, for the Yearly page's year switcher: worked out the same
+-- way, once per year shown (and again when the history changes).
+local _past_years = {}
+function D.yearOf(refresh, y)
+    local now_y = tonumber(os.date("%Y"))
+    y = tonumber(y) or now_y
+    if y >= now_y then return D.year(refresh) end
+    local f = _past_years[y]
+    if not f then
+        f = deferred("year_" .. y, {
+            ttl = 3600,
+            key = function() return historySig() end,
+            sig = function(v) return v.year .. "," .. v.total .. "," .. (v.list[1] and v.list[1].fp or "") end,
+        }, function() return computeYear(y) end)
+        _past_years[y] = f
+    end
+    return f(refresh)
+end
+
+--- The pages and seconds read in each month of year y, from the stats' days.
+function D.yearMonths(st, y)
+    local pages, secs = {}, {}
+    for m = 1, 12 do pages[m], secs[m] = 0, 0 end
+    if type(st) ~= "table" or type(st.days) ~= "table" then return pages, secs end
+    local prefix = string.format("%04d-", y)
+    for key, rec in pairs(st.days) do
+        if key:sub(1, 5) == prefix then
+            local m = tonumber(key:sub(6, 7))
+            if m and pages[m] then
+                pages[m] = pages[m] + (rec.pages or 0)
+                secs[m] = secs[m] + (rec.secs or 0)
+            end
+        end
+    end
+    return pages, secs
+end
+
+-- How far back the Yearly page's year switcher goes.
+D.BACK_YEARS = 10
 
 -- Yearly target (books) and daily target (minutes): Simple UI's Reading
 -- goals, read and written through the host, so changing a goal in either
@@ -554,6 +740,40 @@ local function windowStart()
     return os.time{ year = d.year, month = d.month, day = d.day, hour = 0, min = 0, sec = 0 }
 end
 
+-- What was read before today, kept (in memory, and in
+-- settings/readinglog_statscache.lua across restarts) so that the next read
+-- only goes over the days since: after a sitting that's today alone, the
+-- morning after it's yesterday and today. It's only used while nothing before
+-- that day could have changed: the same number of saved pages before it, the
+-- same books and page counts (a book's pages are rescaled when its page count
+-- changes) and the same database.
+local STATS_CACHE_V = 1
+local _before = nil
+local _disk = nil
+
+local function diskCache()
+    if _disk == nil then
+        local ok, s = pcall(function()
+            local dir = require("datastorage"):getSettingsDir()
+            return require("luasettings"):open(dir .. "/readinglog_statscache.lua")
+        end)
+        _disk = (ok and s and type(s.data) == "table") and s or false
+    end
+    return _disk or nil
+end
+
+local function diskSave(key, value)
+    local c = diskCache()
+    if not c then return end
+    c.data[key] = value
+    pcall(function() c:flush() end)
+end
+
+local function dayMidnight()
+    local t = os.date("*t")
+    return os.time{ year = t.year, month = t.month, day = t.day, hour = 0, min = 0, sec = 0 }
+end
+
 local function loadStats()
     local l = lfs()
     local path = statsPath()
@@ -567,6 +787,31 @@ local function loadStats()
         -- year chart adds up every month since January), back to January
         -- last year for the year-on-year comparison.
         local since = windowStart()
+        local midnight = dayMidnight()
+        local since_ymd = os.date("%Y-%m-%d", since)
+        -- What's kept, if it still holds: the books haven't changed and the
+        -- pages saved before its day are the ones it was worked out from.
+        -- (A few milliseconds off the indexes, even on a big database.)
+        local base, b
+        pcall(function()
+            local n_books, sum_pages = conn:rowexec("SELECT count(*), total(pages) FROM book")
+            base = table.concat({ path, tostring(tonumber(n_books)), tostring(tonumber(sum_pages)) }, "|")
+            b = _before
+            if not b then
+                local c = diskCache()
+                b = c and c.data.before or nil
+            end
+            if type(b) == "table" and b.v == STATS_CACHE_V and b.base == base and (b.since or 0) <= since
+                    and (b.cut or math.huge) <= midnight and type(b.days) == "table" and type(b.hours) == "table"
+                    and type(b.all_days) == "table" then
+                local n = conn:rowexec("SELECT count(*) FROM page_stat_data WHERE start_time < " .. b.cut)
+                if tonumber(n) ~= b.n then b = nil end
+            else
+                b = nil
+            end
+        end)
+        local reuse = b ~= nil
+        local from = reuse and b.cut or since
         -- Same shape as the statistics plugin's own per-day query (page_stat
         -- rescales pages to the book's current pagination); falls back to
         -- the raw table on a database old enough not to have the view.
@@ -577,7 +822,7 @@ local function loadStats()
                 .. " sum(duration) AS sum_duration FROM " .. tbl
                 .. " WHERE start_time >= ? GROUP BY id_book, page, dates)"
                 .. " GROUP BY dates ORDER BY dates")
-            local row = stmt:reset():bind(since):step()
+            local row = stmt:reset():bind(from):step()
             while row do
                 days[row[1]] = { pages = tonumber(row[2]) or 0, secs = tonumber(row[3]) or 0 }
                 row = stmt:step()
@@ -588,12 +833,24 @@ local function loadStats()
             days = {}
             window("page_stat_data")
         end
-        local stmt = conn:prepare(
-            "SELECT DISTINCT strftime('%Y-%m-%d', start_time, 'unixepoch', 'localtime')"
-            .. " FROM page_stat_data ORDER BY 1")
+        -- Every day with any reading (for the streaks): all of them on a full
+        -- read; on a short one, the ones kept from before and today's.
+        local stmt
+        if reuse then
+            for i, d in ipairs(b.all_days) do all_days[i] = d end
+            stmt = conn:prepare(
+                "SELECT DISTINCT strftime('%Y-%m-%d', start_time, 'unixepoch', 'localtime')"
+                .. " FROM page_stat_data WHERE start_time >= ? ORDER BY 1")
+            stmt:reset():bind(from)
+        else
+            stmt = conn:prepare(
+                "SELECT DISTINCT strftime('%Y-%m-%d', start_time, 'unixepoch', 'localtime')"
+                .. " FROM page_stat_data ORDER BY 1")
+        end
         local row = stmt:step()
+        local last = all_days[#all_days]
         while row do
-            all_days[#all_days + 1] = row[1]
+            if not last or row[1] > last then all_days[#all_days + 1] = row[1] end
             row = stmt:step()
         end
         stmt:close()
@@ -603,7 +860,7 @@ local function loadStats()
             "SELECT strftime('%Y-%m-%d', start_time, 'unixepoch', 'localtime'),"
             .. " CAST(strftime('%H', start_time, 'unixepoch', 'localtime') AS INTEGER), sum(duration)"
             .. " FROM page_stat_data WHERE start_time >= ? GROUP BY 1, 2")
-        row = stmt:reset():bind(since):step()
+        row = stmt:reset():bind(from):step()
         while row do
             local d, hr, secs = row[1], tonumber(row[2]), tonumber(row[3]) or 0
             if d and hr and hr >= 0 and hr <= 23 then
@@ -614,15 +871,48 @@ local function loadStats()
             row = stmt:step()
         end
         stmt:close()
+        local today = os.date("%Y-%m-%d", midnight)
+        if reuse then
+            -- put back the days kept (those still in the window)
+            for d, rec in pairs(b.days) do if days[d] == nil and d >= since_ymd then days[d] = rec end end
+            for d, rec in pairs(b.hours) do if hours[d] == nil and d >= since_ymd then hours[d] = rec end end
+        end
+        if base and not (reuse and b.cut == midnight and b.since == since) then
+            -- keep the days before today for the next read
+            local kd, kh, ka = {}, {}, {}
+            for d, rec in pairs(days) do if d < today then kd[d] = rec end end
+            for d, rec in pairs(hours) do if d < today then kh[d] = rec end end
+            for _, d in ipairs(all_days) do if d < today then ka[#ka + 1] = d end end
+            local n = conn:rowexec("SELECT count(*) FROM page_stat_data WHERE start_time < " .. midnight)
+            _before = { v = STATS_CACHE_V, base = base, since = since, cut = midnight, n = tonumber(n) or -1,
+                days = kd, hours = kh, all_days = ka }
+            diskSave("before", _before)
+        else
+            _before = b
+        end
     end)
     conn:close()
-    if not ok then error(err) end
+    if not ok then _before = nil; error(err) end
     local nums = {}
     for _, d in ipairs(all_days) do
         local y, m, dd = A.parseYmd(d)
         if y then nums[#nums + 1] = A.dayNumber(y, m, dd) end
     end
     return { days = days, nums = nums, hours = hours }
+end
+
+--- A stamp that changes when anything a card shows may have: the reading
+--- statistics, the history (a book opened or closed), the date, a setting.
+--- Cheap (a few file dates): a card a home screen keeps on screen looks at it
+--- when it's painted, to know it should draw itself again.
+function D.changeKey()
+    local l = lfs()
+    local hist
+    if l then
+        local ok, dir = pcall(function() return require("datastorage"):getDataDir() end)
+        hist = ok and dir and l.attributes(dir .. "/history.lua", "modification") or nil
+    end
+    return table.concat({ statsKey(), tostring(hist or 0), tostring(A.epoch or 0) }, "|")
 end
 
 local rawStats = deferred("stats", {
@@ -808,8 +1098,23 @@ local function loadPagesBefore()
     local conn = SQ3.open(path, "ro")
     local out = { pages = 0, secs = 0 }
     local before = windowStart()
+    local key
     local ok, err = pcall(function()
         conn:exec("PRAGMA busy_timeout=200;")
+        -- worked out before (this or an earlier start) and nothing it counts
+        -- has changed: the same pages saved before the window, the same books
+        pcall(function()
+            local n = conn:rowexec("SELECT count(*) FROM page_stat_data WHERE start_time < " .. before)
+            local n_books, sum_pages = conn:rowexec("SELECT count(*), total(pages) FROM book")
+            key = table.concat({ STATS_CACHE_V, path, before, tostring(tonumber(n)), tostring(tonumber(n_books)),
+                tostring(tonumber(sum_pages)) }, "|")
+        end)
+        local c = diskCache()
+        local kept = c and c.data.pages_before
+        if key and type(kept) == "table" and kept.key == key and type(kept.out) == "table" then
+            out = kept.out
+            return
+        end
         local function count(tbl)
             local p, s2, first = conn:rowexec(string.format(
                 "SELECT count(*), sum(s), min(dates) FROM ("
@@ -818,6 +1123,7 @@ local function loadPagesBefore()
             out.pages, out.secs, out.first = tonumber(p) or 0, tonumber(s2) or 0, first
         end
         if not pcall(count, "page_stat") then count("page_stat_data") end
+        if key then diskSave("pages_before", { key = key, out = out }) end
     end)
     conn:close()
     if not ok then error(err) end
@@ -1037,9 +1343,21 @@ end
 
 local function computeLengths()
     local yr = D.year(nil, true)
-    -- this year's books and the twelve months before
+    -- this year's books and the twelve months before, and the year the
+    -- Yearly page is showing
     local list, seen = {}, {}
     for _, it in ipairs(yr and yr.list or {}) do seen[it.fp] = true; list[#list + 1] = it end
+    local vy = A.viewYear and A.viewYear() or nil
+    if vy and vy ~= (yr and yr.year) then
+        local past = D.yearOf(nil, vy)
+        if not past then
+            -- not worked out yet: now
+            past = _past_years[vy] and _past_years[vy](nil, true)
+        end
+        for _, it in ipairs(past and past.list or {}) do
+            if not seen[it.fp] then seen[it.fp] = true; it.year = it.year or past.year; list[#list + 1] = it end
+        end
+    end
     for _, l in pairs(yr and yr.recent or {}) do
         for _, it in ipairs(l) do
             if not seen[it.fp] then seen[it.fp] = true; list[#list + 1] = it end
@@ -1070,6 +1388,8 @@ local function computeLengths()
                     first = days[1] and days[1].first
                 end
                 local span
+                local sy, sm, sd = ymdParts(D.bookDates(it.fp).start)
+                if sy then first = os.time{ year = sy, month = sm, day = sd, hour = 12 } end
                 if first then
                     local ft = os.date("*t", first)
                     local start_n = A.dayNumber(ft.year, ft.month, ft.day)
@@ -1087,7 +1407,7 @@ end
 
 local rawLengths = deferred("lengths", {
     ttl = 900,
-    key = function() return statsKey() .. "|" .. A.epoch end,
+    key = function() return statsKey() .. "|" .. A.epoch .. "|" .. tostring(A.viewYear and A.viewYear()) end,
     sig = function(v)
         local n, secs = 0, 0
         for _, rec in pairs(v) do n = n + 1; secs = secs + (rec.secs or 0) end
@@ -1100,7 +1420,7 @@ local rawLengths = deferred("lengths", {
 --- `by` ("time" or "days"). nil while loading, false without a statistics
 --- database.
 function D.longest(refresh, month, by, year)
-    local yr = D.year(refresh)
+    local yr = (year and not month) and D.yearOf(refresh, year) or D.year(refresh)
     if not yr then return nil end
     local lengths = rawLengths(refresh)
     if lengths == nil then return nil end
@@ -1121,6 +1441,47 @@ function D.longest(refresh, month, by, year)
         local b1, b2 = key(b)
         if a1 ~= b1 then return a1 > b1 end
         if a2 ~= b2 then return a2 > b2 end
+        return (a.title or "") < (b.title or "")
+    end)
+    return rows
+end
+
+--- How long each finished book took, first reading day to finish day (span,
+--- in days), for the Finish speed card: this year's books, or with period
+--- "12m" the last twelve months'. Quickest first. nil while loading, false
+--- without a statistics database.
+function D.finishSpeeds(refresh, period)
+    local yr = D.year(refresh)
+    if not yr then return nil end
+    local lengths = rawLengths(refresh)
+    if lengths == nil then return nil end
+    if lengths == false then return false end
+    local src = yr.list or {}
+    if period == "12m" then
+        local t = os.date("*t")
+        local fy, fm = t.year - 1, t.month + 1
+        if fm > 12 then fy, fm = fy + 1, fm - 12 end
+        local from = ymKey(fy, fm)
+        local seen = {}
+        src = {}
+        for key, l in pairs(yr.recent or {}) do
+            if key >= from then
+                for _, it in ipairs(l) do
+                    if not seen[it.fp] then seen[it.fp] = true; src[#src + 1] = it end
+                end
+            end
+        end
+    end
+    local rows = {}
+    for _, it in ipairs(src) do
+        local rec = lengths[it.fp]
+        if rec and (rec.span or 0) > 0 then
+            rows[#rows + 1] = { fp = it.fp, title = it.title, author = it.author, span = rec.span, secs = rec.secs,
+                year = it.year, month = it.month, day = it.day }
+        end
+    end
+    table.sort(rows, function(a, b)
+        if a.span ~= b.span then return a.span < b.span end
         return (a.title or "") < (b.title or "")
     end)
     return rows
@@ -1182,6 +1543,10 @@ local rawStarted = deferred("started", {
 function D.dayOfBook(refresh, fp)
     local v = rawStarted(refresh)
     local rec = type(v) == "table" and v[fp]
+    local sy, sm, sd = ymdParts(D.bookDates(fp).start)
+    if sy then
+        rec = { first = os.time{ year = sy, month = sm, day = sd, hour = 12 }, secs = rec and rec.secs or 0 }
+    end
     if not rec then return nil end
     local ft, t = os.date("*t", rec.first), os.date("*t")
     local n = A.dayNumber(t.year, t.month, t.day) - A.dayNumber(ft.year, ft.month, ft.day) + 1
@@ -1197,6 +1562,8 @@ end
 local SESSION_GAP = 600
 local TREND_DAYS, TREND_RECENT = 365, 90
 
+local _sessions_kept
+
 local function computeSessions()
     local l = lfs()
     local path = statsPath()
@@ -1205,8 +1572,30 @@ local function computeSessions()
     local conn = SQ3.open(path, "ro")
     local since = os.time() - (TREND_DAYS + 2) * 86400
     local out = {}
+    -- The sessions found last time (this start or an earlier one), all but
+    -- the last, which may still be going on: only the pages from its start on
+    -- are read again, as long as none before it changed. (Ones from before
+    -- the window are dropped whole, not cut short; they're older than any
+    -- trend looks at.)
+    local kept
     local ok, err = pcall(function()
         conn:exec("PRAGMA busy_timeout=200;")
+        pcall(function()
+            local c = diskCache()
+            local k = _sessions_kept or (c and c.data.sessions)
+            if type(k) == "table" and k.v == STATS_CACHE_V and k.path == path and type(k.list) == "table"
+                    and (k.cut or 0) > since then
+                local n = conn:rowexec("SELECT count(*) FROM page_stat_data WHERE start_time < " .. k.cut)
+                if tonumber(n) == k.n then kept = k end
+            end
+        end)
+        if kept then
+            for _, ss in ipairs(kept.list) do
+                if ss.start >= since then out[#out + 1] = ss end
+            end
+            since = kept.cut
+        end
+        local first_new = #out + 1
         local grouped = pcall(function()
             local stmt = conn:prepare(
                 "WITH r AS (SELECT start_time AS s, duration AS d,"
@@ -1223,7 +1612,7 @@ local function computeSessions()
             stmt:close()
         end)
         if not grouped then
-            out = {}
+            for i = #out, first_new, -1 do out[i] = nil end
             local stmt = conn:prepare("SELECT start_time, duration FROM page_stat_data WHERE start_time >= ? ORDER BY start_time")
             local row = stmt:reset():bind(since):step()
             local cur, last_end
@@ -1239,9 +1628,18 @@ local function computeSessions()
             end
             stmt:close()
         end
+        -- keep all but the last for next time
+        local last = out[#out]
+        if last and not (kept and kept.cut == last.start) then
+            local list = {}
+            for i = 1, #out - 1 do list[i] = out[i] end
+            local n = conn:rowexec("SELECT count(*) FROM page_stat_data WHERE start_time < " .. last.start)
+            _sessions_kept = { v = STATS_CACHE_V, path = path, cut = last.start, n = tonumber(n) or -1, list = list }
+            diskSave("sessions", _sessions_kept)
+        end
     end)
     conn:close()
-    if not ok then error(err) end
+    if not ok then _sessions_kept = nil; error(err) end
     return out
 end
 
@@ -2271,6 +2669,87 @@ local function fileForBook(md5, title)
     return nil
 end
 
+-- ─── finished: read to the end ───────────────────────────────────────────────
+-- What "finished" means is the reader's choice (D.finishedBy):
+--   marked  (the default) the book is marked finished, as the home screen
+--           counts it (Simple UI's or Bookshelf's finished books)
+--   read    the reading statistics show you reached the last 1% of the book;
+--           the day you got there is the day it was finished
+--   either  one or the other
+-- KOReader's statistics plugin keeps a row for every page you read: which
+-- page, out of how many pages the book had then, and when. So "when did I
+-- reach the end" is a question for the statistics: the first page read past
+-- 99% of the book since you last began it (a page in its first 10%). A book
+-- read twice counts in the year of its latest read-through.
+
+function D.finishedBy()
+    local v = A.get("finished_by", "marked")
+    if v ~= "read" and v ~= "either" then v = "marked" end
+    return v
+end
+
+local END_AT, START_BELOW = 0.99, 0.10
+local _ends = { key = nil, list = nil }
+
+--- Every book the statistics show was read to the end:
+--- { { fp, md5, title, time } }, fp nil when its file isn't found. false
+--- without a statistics database.
+function D.readToEnd()
+    local key = statsKey()
+    if _ends.key == key and _ends.list then return _ends.list end
+    local l = lfs()
+    local path = statsPath()
+    if not (l and l.attributes(path, "mode") == "file") then return false end
+    local SQ3 = require("lua-ljsqlite3/init")
+    local conn = SQ3.open(path, "ro")
+    local per = {}   -- id -> { md5, title, restart, done_after, done_any }
+    local ok, err = pcall(function()
+        conn:exec("PRAGMA busy_timeout=200;")
+        local stmt = conn:prepare("SELECT p.id_book, p.start_time, CAST(p.page AS REAL) / p.total_pages, b.md5, b.title"
+            .. " FROM page_stat_data p JOIN book b ON b.id = p.id_book"
+            .. " WHERE p.total_pages > 0 AND (CAST(p.page AS REAL) / p.total_pages >= ?"
+            .. " OR CAST(p.page AS REAL) / p.total_pages < ?)"
+            .. " ORDER BY p.id_book, p.start_time")
+        local row = stmt:reset():bind(END_AT, START_BELOW):step()
+        while row do
+            local id, t, frac = tonumber(row[1]), tonumber(row[2]) or 0, tonumber(row[3]) or 0
+            local b = per[id]
+            if not b then
+                b = { md5 = row[4], title = row[5] }
+                per[id] = b
+            end
+            if frac >= END_AT then
+                -- the first time at the end in this read-through
+                if not b.done_after then b.done_after = t end
+                b.done_any = b.done_any or t
+            else
+                -- begun again: a later finish belongs to this read-through
+                b.restart = t
+                if b.done_after then b.prev, b.done_after = b.done_after, nil end
+            end
+            row = stmt:step()
+        end
+        stmt:close()
+    end)
+    pcall(conn.close, conn)
+    if not ok then
+        A.log("read-to-the-end query failed:", err)
+        return false
+    end
+    local list = {}
+    for _, b in pairs(per) do
+        -- finished in this read-through, or (being read again now) the last one
+        local t = b.done_after or b.prev
+        if t then
+            local md5 = type(b.md5) == "string" and b.md5 ~= "" and b.md5 or nil
+            local title = type(b.title) == "string" and b.title or nil
+            list[#list + 1] = { fp = fileForBook(md5, title), md5 = md5, title = title, time = t }
+        end
+    end
+    _ends.key, _ends.list = key, list
+    return list
+end
+
 -- The days from..to (times, to not included): { ["YYYY-MM-DD"] = { book, ... } },
 -- each day's books read longest first: { title, author, secs, pages, fp }.
 local function readDays(from_t, to_t)
@@ -2359,6 +2838,65 @@ function D.coverDays(refresh, which, sync)
     return coverMonth(refresh, sync)
 end
 D.readDays = readDays
+
+-- Pages read in each book this year, this month or this week, for a goal that
+-- counts one collection: { [file] = pages }. A book the statistics can't tie
+-- to a file isn't counted (it can't be in a collection anyway).
+local function periodRange(period)
+    local t = os.date("*t")
+    if period == "week" then
+        local from, to, k = weekRange()
+        return from, to, "w" .. k
+    elseif period == "month" then
+        return os.time{ year = t.year, month = t.month, day = 1, hour = 0 },
+            os.time{ year = t.year, month = t.month + 1, day = 1, hour = 0 }, "m" .. t.year .. "-" .. t.month
+    end
+    return os.time{ year = t.year, month = 1, day = 1, hour = 0 },
+        os.time{ year = t.year + 1, month = 1, day = 1, hour = 0 }, "y" .. t.year
+end
+
+local function bookSig(v)
+    local keys = {}
+    for fp, n in pairs(v) do keys[#keys + 1] = fp .. "=" .. n end
+    table.sort(keys)
+    return table.concat(keys, ";")
+end
+
+local _pages_by_book = {}
+--- nil while loading, false without statistics.
+function D.pagesByBook(refresh, period, sync)
+    if period ~= "week" and period ~= "month" then period = "year" end
+    local slot = _pages_by_book[period]
+    if not slot then
+        slot = deferred("pages_by_book_" .. period, {
+            ttl = 600, sig = bookSig,
+            key = function() local _, _, k = periodRange(period); return statsKey() .. "|" .. k .. "|" .. D.weekStart() end,
+        }, function()
+            local from, to = periodRange(period)
+            local days = readDays(from, to)
+            if not days then return days end
+            local out = {}
+            for _, list in pairs(days) do
+                for _, e in ipairs(list) do
+                    if e.fp then out[e.fp] = (out[e.fp] or 0) + (e.pages or 0) end
+                end
+            end
+            return out
+        end)
+        _pages_by_book[period] = slot
+    end
+    return slot(refresh, sync)
+end
+
+--- The files of a collection as a set, or nil when there's no such collection.
+function D.collectionSet(name)
+    if not name or name == "" then return nil end
+    local ok, RC = pcall(require, "readcollection")
+    if not (ok and RC and type(RC.coll) == "table" and type(RC.coll[name]) == "table") then return nil end
+    local set, n = {}, 0
+    for fp in pairs(RC.coll[name]) do set[fp] = true; n = n + 1 end
+    return set, n
+end
 
 -- ─── your highlights ─────────────────────────────────────────────────────────
 -- Read from each book's sidecar (KOReader's "annotations", or the older
@@ -2660,6 +3198,28 @@ end
 function D.showDetails(ctx, fp)
     if not D.fileExists(fp) then return D.openBook(ctx, fp) end
     A.host.showDetails(ctx, fp)
+end
+
+-- Open a book at one of its highlights (a quote card, with "When tapped: Go
+-- to the highlight"). The place is left for the plugin, which turns to it
+-- once the book is open (main.lua, onReaderReady); a highlight that can't be
+-- found any more just opens the book where you left off.
+function D.openAtHighlight(ctx, fp, text)
+    local ok, pos = pcall(A.host.highlightPos, fp, text)
+    if ok and type(pos) == "table" and pos.page then
+        package.loaded["readinglog_goto"] = { fp = fp, page = pos.page, pos0 = pos.pos0, at = os.time() }
+    end
+    D.openBook(ctx, fp)
+end
+
+-- What a tap on a quote card opens: the book where you left off, or the
+-- highlight itself.
+function D.openQuote(ctx, fp, text)
+    if not fp then return end
+    if A.get("quote_tap", "book") == "highlight" and text then
+        return D.openAtHighlight(ctx, fp, text)
+    end
+    D.openBook(ctx, fp)
 end
 
 -- Run a KOReader action by its dispatcher name.
