@@ -649,7 +649,16 @@ function ReadingLog:onReaderReady()
     local file = ui and ui.document and ui.document.file
     if type(j) ~= "table" or not file then return end
     package.loaded["readinglog_goto"] = nil
-    if j.fp ~= file or os.time() - (j.at or 0) > 120 then return end
+    -- (the same file, however its path was written: ZenOS and Simple UI can
+    -- open a book by a path with a symlink or a // in it)
+    local function same(a, b)
+        if a == b then return true end
+        local ok, ffiutil = pcall(require, "ffi/util")
+        if not (ok and ffiutil and ffiutil.realpath) then return false end
+        local ra, rb = ffiutil.realpath(a), ffiutil.realpath(b)
+        return ra ~= nil and ra == rb
+    end
+    if not same(j.fp, file) or os.time() - (j.at or 0) > 120 then return end
     UIManager:nextTick(function()
         local ok, err = pcall(function()
             local Event = require("ui/event")
@@ -731,6 +740,15 @@ function ReadingLog:addToMainMenu(menu_items)
                         radio("finished_by", "either", _("Either"), "marked"),
                     },
                     help_text = _("Marked finished: the way your home screen counts finished books, on the day it was marked. Read to the end: the reading statistics show you reached the last 1% of the book, on the day you got there, marked or not. Either: one or the other."),
+                },
+                {
+                    text = _("Count each book once"),
+                    checked_func = function() return getShared("merge_books", true) ~= false end,
+                    callback = function()
+                        local on = getShared("merge_books", true) ~= false
+                        setShared("merge_books", on and false or nil)
+                    end,
+                    help_text = _("KOReader's reading statistics can have the same book twice, when its file changed (Calibre rewrote its metadata, a new download, a converted copy, statistics from another reader). With this on, a book with the same title and author counts once, so it isn't finished twice. Turn it off if you have different books with the same title and author."),
                 },
                 {
                     text = _("Week starts on"),

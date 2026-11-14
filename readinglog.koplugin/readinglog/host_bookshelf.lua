@@ -248,6 +248,11 @@ function H.quoteOfTheDay()
     local Q = first and quotes() or nil
     if Q then
         local q = Q.ofTheDay()
+        -- (not from a book left out of the quote cards: a pick of our own then)
+        local allow = q and A.D and A.D.quoteFilter and A.D.quoteFilter()
+        if allow and not allow(q.filepath) then q = nil end
+        -- (nor with colours left out here: Bookshelf's pick doesn't say its colour)
+        if q and A.D.quoteSkipColours and A.D.quoteSkipColours() then q = nil end
         if q then
             -- its book and text, so Another keeps to the rules above
             local th = H.hash(tostring(q.text))

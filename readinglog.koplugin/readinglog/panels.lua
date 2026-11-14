@@ -7256,22 +7256,32 @@ local function bookSource(fp)
     return title
 end
 
--- Every highlight in the reading history in one list: { {fp, e}, ... }.
-local function allHighlights(hl)
-    if not hl._flat then
-        local flat = {}
-        for _, b in ipairs(hl.books) do
-            for _, e in ipairs(b.list) do flat[#flat + 1] = { fp = b.fp, e = e } end
+-- Every highlight card `name` may show, in one list: { {fp, e}, ... } (only
+-- the books it may pick from, D.quoteFilter, and not in a colour it leaves
+-- out, D.quoteSkipColours: each quote card has its own).
+-- (helpers kept in one table: this file is near Lua's limit of locals)
+local QT = {}
+function QT.norm(t) return (t:gsub("%s+", " "):match("^%s*(.-)%s*$")):sub(1, 200) end
+
+local function allHighlights(hl, name)
+    local allow, fkey = D.quoteFilter(name)
+    local skip, ckey = D.quoteSkipColours(name)
+    fkey = (fkey or "") .. "#" .. (ckey or "")
+    hl._flat = type(hl._flat) == "table" and hl._flat or {}
+    local kept = hl._flat[name or "quote"]
+    if kept and kept.key == fkey then return kept.list end
+    local flat = {}
+    for _, b in ipairs(hl.books) do
+        if not allow or allow(b.fp) then
+            for _, e in ipairs(b.list) do
+                if not (skip and e.color and skip[e.color]) then flat[#flat + 1] = { fp = b.fp, e = e } end
+            end
         end
-        hl._flat = flat
     end
-    return hl._flat
+    hl._flat[name or "quote"] = { key = fkey, list = flat }
+    return flat
 end
 
-local function sameText(a, b)
-    local function norm(t) return (t:gsub("%s+", " "):match("^%s*(.-)%s*$")):sub(1, 200) end
-    return type(a) == "string" and type(b) == "string" and norm(a) == norm(b)
-end
 
 -- Where a card is in today's shuffled list: its own place once Another was
 -- tapped today, else its own starting place (each card starts on another one).
@@ -7282,26 +7292,26 @@ local function quotePos(name, day)
     return 0
 end
 
--- From place `from` on, the first one not `taken` and not the highlight
--- Quote of the day is showing.
+-- From place `from` on in a card's list, the first one whose highlight no
+-- card before it shows (`taken`: their texts).
 local function freePlace(flat, order, taken, from)
     local count = #flat
-    local q = D.quotePeek()
-    local qtext = q and q.text
     local p = from % count
     for _ = 1, count do
-        if not taken[p] and not sameText(flat[order[p + 1]].e.text, qtext) then return p end
+        if not taken[QT.norm(flat[order[p + 1]].e.text)] then return p end
         p = (p + 1) % count
     end
     return from % count
 end
 
--- Today's order, with no book three times in a row while others are left:
--- Another steps along it, so the same book shows at most twice running.
-local _spread = {}
+-- Today's order of a card's list, with no book three times in a row while
+-- others are left: Another steps along it, so the same book shows at most
+-- twice running.
+local _spread = setmetatable({}, { __mode = "k" })
 local function spreadOrder(flat, day)
+    local kept = _spread[flat]
+    if kept and kept.day == day then return kept.list end
     local order = D.dayOrder(#flat, day)
-    if _spread.src == order and _spread.n == #flat then return _spread.list end
     local list = {}
     for i, v in ipairs(order) do list[i] = v end
     for i = 3, #list do
@@ -7312,39 +7322,55 @@ local function spreadOrder(flat, day)
             end
         end
     end
-    _spread.src, _spread.n, _spread.list = order, #flat, list
+    _spread[flat] = { day = day, list = list }
     return list
 end
 
--- Where every quote card is today, settled in order: each skips the places
--- of the cards before it (so two never show the same highlight).
-local function quotePlaces(flat, order, day)
+-- A card's list and today's order of it (nil order when it has nothing).
+function QT.cardList(hl, name, day)
+    local flat = allHighlights(hl, name)
+    if #flat == 0 then return flat, nil end
+    return flat, spreadOrder(flat, day)
+end
+
+-- Where every quote card is today, settled in order: each skips the
+-- highlights the cards before it show, and the one Quote of the day shows
+-- (so two never show the same one). { [name] = place }, and the texts shown.
+local function quotePlaces(hl, day)
     local taken, places = {}, {}
+    local q = D.quotePeek()
+    if q and type(q.text) == "string" then taken[QT.norm(q.text)] = true end
     for _, n in ipairs(MORE_QUOTES) do
-        local p = freePlace(flat, order, taken, quotePos(n, day))
-        taken[p], places[n] = true, p
+        local flat, order = QT.cardList(hl, n, day)
+        if order then
+            local p = freePlace(flat, order, taken, quotePos(n, day))
+            places[n] = p
+            taken[QT.norm(flat[order[p + 1]].e.text)] = true
+        end
     end
     return places
 end
 
--- Another: the next highlight in today's list that no other card is showing.
--- The other cards are kept where they are, so only this one changes.
+-- Another: the next highlight in this card's list that no other card is
+-- showing. The other cards are kept where they are, so only this one changes.
 function A.quoteAgain(name)
     local hl = D.highlights()
-    local flat = hl and allHighlights(hl)
-    if not flat or #flat == 0 then return end
+    if not hl then return end
     local day = os.date("%Y-%m-%d")
-    local order = spreadOrder(flat, day)
-    local places = quotePlaces(flat, order, day)
+    local flat, order = QT.cardList(hl, name, day)
+    if not order then return end
+    local places = quotePlaces(hl, day)
     local taken = {}
+    local q = D.quotePeek()
+    if q and type(q.text) == "string" then taken[QT.norm(q.text)] = true end
     for _, n in ipairs(MORE_QUOTES) do
-        if n ~= name then
-            local p = places[n]
-            taken[p] = true
-            if quotePos(n, day) ~= p then A.set(n .. "_state", { day = day, pos = p }) end
+        if n ~= name and places[n] then
+            local f, o = QT.cardList(hl, n, day)
+            taken[QT.norm(f[o[places[n] + 1]].e.text)] = true
+            if quotePos(n, day) ~= places[n] then A.set(n .. "_state", { day = day, pos = places[n] }) end
         end
     end
-    A.set(name .. "_state", { day = day, pos = freePlace(flat, order, taken, places[name] + 1) })
+    A.set(name .. "_state", { day = day, pos = freePlace(flat, order, taken, (places[name] or 0) + 1) })
 end
 
 for _, name in ipairs(MORE_QUOTES) do
@@ -7360,14 +7386,13 @@ for _, name in ipairs(MORE_QUOTES) do
         if not hl then
             return drawQuote(env, c, s, { head = head, waiting = T("Finding your highlights\xE2\x80\xA6") })
         end
-        local flat = allHighlights(hl)
-        if #flat == 0 then
+        local day = os.date("%Y-%m-%d")
+        local flat, order = QT.cardList(hl, name, day)
+        if not order then
             return emptyState(env, c, s, head, T("No highlights yet"),
                 T("Highlight a line while you read and it can show up here."))
         end
-        local day = os.date("%Y-%m-%d")
-        local order = spreadOrder(flat, day)
-        local pick = flat[order[quotePlaces(flat, order, day)[name] + 1]]
+        local pick = flat[order[(quotePlaces(hl, day)[name] or 0) + 1]]
         A.state[name .. "_fp"], A.state[name .. "_text"] = pick.fp, pick.e.text
         return drawQuote(env, c, s, { head = head, text = pick.e.text, source = bookSource(pick.fp) })
     end
@@ -8198,11 +8223,24 @@ function P.cover_week.build(env)
     return c
 end
 
--- A day's books in a list; a book opens it.
+-- A day's books, on a card of their own (dayview.lua); a book opens it.
 local function showDay(env, key)
     local which = env.name == "cover_week" and "week" or "month"
     local days = (which == "week" and D.coverDays(nil, "week")) or D.coverDays(nil, "month") or {}
     local list = days[key] or (D.coverDays(nil, which == "week" and "month" or "week") or {})[key]
+    if not list then
+        -- not loaded (another month, or not read yet): just that day
+        local yy, mm, dd = key:match("^(%d+)-(%d+)-(%d+)$")
+        if yy then
+            local from = os.time{ year = tonumber(yy), month = tonumber(mm), day = tonumber(dd), hour = 0 }
+            local to = os.time{ year = tonumber(yy), month = tonumber(mm), day = tonumber(dd) + 1, hour = 0 }
+            local ok, one = pcall(D.readDays, from, to)
+            list = ok and type(one) == "table" and one[key] or nil
+        end
+    end
+    -- the day's card (dayview.lua); the plain list if it can't be shown
+    local view = A.dayView and A.dayView()
+    if view and pcall(view, env.ctx, key, list) then return end
     local y, m, d = key:match("^(%d+)-(%d+)-(%d+)$")
     local when = os.time{ year = tonumber(y), month = tonumber(m), day = tonumber(d), hour = 12 }
     A.S.open(env.ctx, A.date("%A %d %B", when), function(api)

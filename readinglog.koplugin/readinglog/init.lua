@@ -39,7 +39,7 @@ its box with a rounded panel and draws on that.
 local HOST_KIND = ...
 if HOST_KIND ~= "bookshelf" then HOST_KIND = "simpleui" end
 
-local A = { VERSION = "1.5.0", NAME = "Reading Log" }
+local A = { VERSION = "1.5.1", NAME = "Reading Log" }
 A.HOST_KIND = HOST_KIND
 A.HOST = HOST_KIND == "bookshelf" and "Bookshelf" or "Simple UI"
 
@@ -145,12 +145,38 @@ A.ACCENTS = {
     -- the Dark Academia theme's two
     oxblood = { label = T("Oxblood"), deep = { 122, 31, 31 }, bright = { 204, 102, 85 }, pair = "brass" },
     brass   = { label = T("Brass"),   deep = { 136, 102, 34 }, bright = { 212, 174, 92 }, pair = "oxblood" },
+    -- shades of grey, for black and white screens: from the ink itself to a
+    -- light grey (on a dark card, from white to a dark grey)
+    black   = { label = T("Black"),      deep = { 0, 0, 0 },       bright = { 255, 255, 255 }, pair = "grey", shade = true },
+    charcoal = { label = T("Dark grey"), deep = { 68, 68, 68 },    bright = { 187, 187, 187 }, pair = "silver", shade = true },
+    grey    = { label = T("Grey"),       deep = { 119, 119, 119 }, bright = { 136, 136, 136 }, pair = "black", shade = true },
+    silver  = { label = T("Light grey"), deep = { 170, 170, 170 }, bright = { 85, 85, 85 },    pair = "charcoal", shade = true },
 }
 A.ACCENT_ORDER = { "red", "orange", "gold", "lime", "green", "teal", "sky", "blue", "purple", "magenta", "pink", "brown",
-    "neon", "cyan", "oxblood", "brass" }
--- the accents that come with a theme of their own (left out of rounds of
--- colours, such as Reading trends' six)
-A.THEME_ACCENTS = { neon = true, cyan = true, oxblood = true, brass = true }
+    "neon", "cyan", "oxblood", "brass", "black", "charcoal", "grey", "silver" }
+A.ACCENT_ORDER_BW = { "black", "charcoal", "grey", "silver" }
+-- the accents that come with a theme of their own, and the greys (left out
+-- of rounds of colours, such as Reading trends' six)
+A.THEME_ACCENTS = { neon = true, cyan = true, oxblood = true, brass = true,
+    black = true, charcoal = true, grey = true, silver = true }
+
+--- Black and white: the colour pickers offer shades of grey only. "auto"
+--- (the default) follows the screen: black and white on a greyscale reader.
+function A.screenMode()
+    local v = A.get("screen_mode", "auto")
+    if v ~= "color" and v ~= "bw" then v = "auto" end
+    return v
+end
+function A.bw()
+    local v = A.screenMode()
+    if v ~= "auto" then return v == "bw" end
+    local ok, Device = pcall(require, "device")
+    if not ok or not Device then return false end
+    local okc, colour = pcall(function() return Device:hasColorScreen() end)
+    return okc and not colour or false
+end
+--- The accents to pick from.
+function A.accentOrder() return A.bw() and A.ACCENT_ORDER_BW or A.ACCENT_ORDER end
 
 local WHITE, BLACK = { 255, 255, 255 }, { 0, 0, 0 }
 
@@ -209,6 +235,12 @@ function A.accentIds()
     if not A.ACCENTS[a] then a = th.accent end
     local b = A.get("accent2", nil)
     if not A.ACCENTS[b] then b = (a == th.accent and th.accent2) or A.ACCENTS[a].pair end
+    -- black and white: a colour picked (or the theme's) gives way to the ink
+    -- and a grey
+    if A.bw() then
+        if not A.ACCENTS[a].shade then a = "black" end
+        if not A.ACCENTS[b].shade then b = A.ACCENTS[a].pair end
+    end
     return a, b
 end
 
@@ -335,6 +367,8 @@ end
 
 -- Whether the theme sets its cards in a serif (Dark Academia).
 function A.serifTheme()
+    -- (the reader can keep their own UI font: Styles and colours > Font)
+    if A.get("style_font", "style") == "ui" then return false end
     return A.THEMES[A.themeId()].serif and true or false
 end
 
@@ -1639,11 +1673,15 @@ function A.paintCacheClear()
     PC.map, PC.n, PC.bytes = {}, 0, 0
 end
 
--- About two screens' worth, in the bitmap's own bytes per pixel.
+-- Room for the pictures kept: enough for every page of the Dashboard and
+-- the cards around it: six screens' worth (about 12 MB on a 300 dpi
+-- greyscale reader; a colour screen's pixel takes four times the memory,
+-- about 51 MB on a Libra Colour). Pictures not used for ten minutes are let
+-- go of (pcSweep).
 local function pcBudget(bb)
     local Screen = A.screen()
     local bpp = (bb.getBpp and bb:getBpp() or 32) / 8
-    return floor(Screen:getWidth() * Screen:getHeight() * bpp * 2)
+    return floor(Screen:getWidth() * Screen:getHeight() * bpp * 6)
 end
 
 local function pcSweep()
@@ -2262,6 +2300,9 @@ local function canvasClass()
     end
 
     function C:free()
+        -- (a Dashboard page kept for turning back to it: the screen that
+        -- showed it lets go of it, but it stays whole; see modules.lua)
+        if self.kept then return end
         for _, wdg in ipairs(self.owned) do
             if wdg.free then pcall(wdg.free, wdg) end
         end
@@ -2428,6 +2469,18 @@ part("stylepacks")
 part(HOST_KIND == "bookshelf" and "bookshelf" or "modules")
 -- Reading Log's own windows: the full-screen dashboard and ZenOS's widgets
 if HOST_KIND ~= "bookshelf" then part("ownscreen") end
+
+-- A tapped day of the calendar (dayview.lua), read the first time it's
+-- needed: function(ctx, key, list), or false if it couldn't be loaded.
+local _dayview
+function A.dayView()
+    if _dayview == nil then
+        local ok, r = pcall(part, "dayview")
+        _dayview = (ok and type(r) == "function") and r or false
+        if not _dayview then A.log("day view could not be loaded:", r) end
+    end
+    return _dayview
+end
 
 -- The Cyber look's drawing lives in cyber.lua, read the first time a card
 -- asks for it: a Dashboard that never uses Cyber never loads it.

@@ -107,6 +107,9 @@ local function deferred(name, o, compute)
         local sig = (o.sig and s.value) and o.sig(s.value) or tostring(s.value)
         local changed = first or sig ~= s.sig or not o.sig
         s.sig = sig
+        -- (a count of the times anything changed: a page already drawn with
+        -- older figures is drawn again, see the Dashboard's page cache)
+        if changed then D.gen = (D.gen or 0) + 1 end
         return changed
     end
     local function get(refresh, sync)
@@ -422,9 +425,14 @@ local function computeYear(want_year)
     -- date is pulled back to the last day of real reading on or before it.
     local fixer = D.finishFixer and D.finishFixer() or nil
     local overrides = bookDatesAll()
-    local added = {}
+    local added, added_book = {}, {}
+    local merge = D.mergeBooks()
     local function add(fp, y, m, d, skip_count)
         if added[fp] then return end
+        -- the same book under another file (two copies of it): once
+        local info0 = D.info(fp)
+        local bk = merge and info0 and D.bookKey(info0.title, info0.author) or nil
+        if bk and added_book[bk] then added[fp] = true return end
         local o = overrides[fp]
         local oy, om, od = ymdParts(type(o) == "table" and o.finish)
         if oy then
@@ -439,6 +447,7 @@ local function computeYear(want_year)
             return
         end
         added[fp] = true
+        if bk then added_book[bk] = true end
         -- outside both this year and the months the Monthly page goes back to
         if y ~= t.year and ymKey(y, m) < first_key then return end
         local info = D.info(fp)
@@ -1751,19 +1760,28 @@ end
 
 --- The trends (see D.trendsFrom), nil while loading, false without a
 --- statistics database.
+-- (worked out once for the same figures on the same day: a few hundred
+-- days walked through, which a page turn shouldn't pay for every time)
+local _trends = {}
 function D.trends(refresh)
     local raw = rawStats(refresh)
     if raw == false then return false end
     local sessions = rawSessions(refresh)
     local yr = D.year(refresh)
     if not raw or sessions == nil or not yr then return nil end
+    local today = os.date("%Y-%m-%d")
+    if _trends.raw == raw and _trends.sessions == sessions and _trends.yr == yr and _trends.day == today then
+        return _trends.v
+    end
     local finished = {}
     for _, l in pairs(yr.recent or {}) do
         for _, it in ipairs(l) do
             if it.year and it.month then finished[#finished + 1] = A.dayNumber(it.year, it.month, it.day or 1) end
         end
     end
-    return D.trendsFrom(raw.days, raw.nums[1], sessions or {}, finished, os.date("*t"))
+    local v = D.trendsFrom(raw.days, raw.nums[1], sessions or {}, finished, os.date("*t"))
+    _trends = { raw = raw, sessions = sessions, yr = yr, day = today, v = v }
+    return v
 end
 
 -- ─── this week against last week ────────────────────────────────────────────
@@ -2650,6 +2668,16 @@ local function sidecarMd5(fp)
     return v or nil
 end
 
+--- "The same book" for counting it once: its title and author, in lower case
+--- with spaces and punctuation left out. nil without a title.
+function D.bookKey(title, author)
+    if type(title) ~= "string" or title == "" then return nil end
+    local function norm(v) return type(v) == "string" and v:lower():gsub("[%s%p]", "") or "" end
+    local t = norm(title)
+    if t == "" then return nil end
+    return t .. "|" .. norm(author)
+end
+
 local function fileForBook(md5, title)
     if md5 then
         local known = _md5_fp[md5]
@@ -2682,6 +2710,12 @@ end
 -- 99% of the book since you last began it (a page in its first 10%). A book
 -- read twice counts in the year of its latest read-through.
 
+--- Count a book once when it's in the statistics twice (or there are two
+--- copies of its file): the same title and author. On unless turned off.
+function D.mergeBooks()
+    return A.get("merge_books", true) ~= false
+end
+
 function D.finishedBy()
     local v = A.get("finished_by", "marked")
     if v ~= "read" and v ~= "either" then v = "marked" end
@@ -2695,7 +2729,8 @@ local _ends = { key = nil, list = nil }
 --- { { fp, md5, title, time } }, fp nil when its file isn't found. false
 --- without a statistics database.
 function D.readToEnd()
-    local key = statsKey()
+    local merge = D.mergeBooks()
+    local key = statsKey() .. (merge and "|m" or "")
     if _ends.key == key and _ends.list then return _ends.list end
     local l = lfs()
     local path = statsPath()
@@ -2705,7 +2740,7 @@ function D.readToEnd()
     local per = {}   -- id -> { md5, title, restart, done_after, done_any }
     local ok, err = pcall(function()
         conn:exec("PRAGMA busy_timeout=200;")
-        local stmt = conn:prepare("SELECT p.id_book, p.start_time, CAST(p.page AS REAL) / p.total_pages, b.md5, b.title"
+        local stmt = conn:prepare("SELECT p.id_book, p.start_time, CAST(p.page AS REAL) / p.total_pages, b.md5, b.title, b.authors"
             .. " FROM page_stat_data p JOIN book b ON b.id = p.id_book"
             .. " WHERE p.total_pages > 0 AND (CAST(p.page AS REAL) / p.total_pages >= ?"
             .. " OR CAST(p.page AS REAL) / p.total_pages < ?)"
@@ -2715,7 +2750,7 @@ function D.readToEnd()
             local id, t, frac = tonumber(row[1]), tonumber(row[2]) or 0, tonumber(row[3]) or 0
             local b = per[id]
             if not b then
-                b = { md5 = row[4], title = row[5] }
+                b = { md5 = row[4], title = row[5], authors = row[6] }
                 per[id] = b
             end
             if frac >= END_AT then
@@ -2736,14 +2771,29 @@ function D.readToEnd()
         A.log("read-to-the-end query failed:", err)
         return false
     end
-    local list = {}
-    for _, b in pairs(per) do
+    -- One entry per book. KOReader's statistics can hold the same book twice
+    -- (its file changed: Calibre rewrote its metadata, a new download, a
+    -- converted copy, statistics synced from another reader), and both rows
+    -- may reach the end: the same title and author are one book, finished at
+    -- its latest read-through, with whichever file is found.
+    local list, seen = {}, {}
+    for id, b in pairs(per) do
         -- finished in this read-through, or (being read again now) the last one
         local t = b.done_after or b.prev
         if t then
             local md5 = type(b.md5) == "string" and b.md5 ~= "" and b.md5 or nil
             local title = type(b.title) == "string" and b.title or nil
-            list[#list + 1] = { fp = fileForBook(md5, title), md5 = md5, title = title, time = t }
+            local e = { fp = fileForBook(md5, title), md5 = md5, title = title, time = t }
+            local k = merge and D.bookKey(title, b.authors) or nil
+            if not k then k = "id:" .. tostring(id) end
+            local o = seen[k]
+            if not o then
+                seen[k] = e
+                list[#list + 1] = e
+            else
+                if t > o.time then o.time = t; o.md5 = md5 or o.md5; o.fp = e.fp or o.fp
+                else o.fp = o.fp or e.fp end
+            end
         end
     end
     _ends.key, _ends.list = key, list
@@ -2762,7 +2812,9 @@ local function readDays(from_t, to_t)
     local ok, err = pcall(function()
         conn:exec("PRAGMA busy_timeout=200;")
         local stmt = conn:prepare("SELECT strftime('%Y-%m-%d', p.start_time, 'unixepoch', 'localtime'), p.id_book,"
-            .. " sum(p.duration), count(DISTINCT p.page), b.title, b.authors, b.md5"
+            .. " sum(p.duration), count(DISTINCT p.page), b.title, b.authors, b.md5,"
+            -- how far through the book the day got (the furthest page)
+            .. " max(CAST(p.page AS REAL) / NULLIF(p.total_pages, 0))"
             .. " FROM page_stat_data p JOIN book b ON b.id = p.id_book"
             .. " WHERE p.start_time >= ? AND p.start_time < ? GROUP BY 1, 2")
         local row = stmt:reset():bind(from_t, to_t):step()
@@ -2777,7 +2829,8 @@ local function readDays(from_t, to_t)
             end
             local d = tostring(row[1])
             days[d] = days[d] or {}
-            table.insert(days[d], { book = bk, secs = tonumber(row[3]) or 0, pages = tonumber(row[4]) or 0 })
+            table.insert(days[d], { book = bk, secs = tonumber(row[3]) or 0, pages = tonumber(row[4]) or 0,
+                pct = tonumber(row[8]) })
             row = stmt:step()
         end
         stmt:close()
@@ -2790,7 +2843,8 @@ local function readDays(from_t, to_t)
         table.sort(list, function(a, b) return a.secs > b.secs end)
         local day = {}
         for i, e in ipairs(list) do
-            day[i] = { title = e.book.title, author = e.book.author, fp = e.book.fp, secs = e.secs, pages = e.pages }
+            day[i] = { title = e.book.title, author = e.book.author, fp = e.book.fp, secs = e.secs, pages = e.pages,
+                pct = e.pct and A.clamp(e.pct, 0, 1) or nil }
         end
         out[d] = day
     end
@@ -2898,6 +2952,157 @@ function D.collectionSet(name)
     return set, n
 end
 
+--- Which books a quote card picks from, as the reader ticked them, each quote
+--- card its own (`name`: "quote" for Quote of the day, "quote2"… for the
+--- others; nil is Quote of the day):
+---   <name>_inc = { colls = { names }, books = { files } }: only these (none
+---     ticked: every book)
+---   <name>_exc = the same: never these (they win over <name>_inc)
+--- (1.5.1's first test builds had quote_from = "only"/"except" and one
+--- quote_coll; that becomes the same thing here.)
+local function quoteSelRaw(key)
+    local v = A.get(key, nil)
+    local out = { colls = {}, books = {} }
+    if type(v) == "table" then
+        for _, c in ipairs(type(v.colls) == "table" and v.colls or {}) do
+            if type(c) == "string" then out.colls[#out.colls + 1] = c end
+        end
+        for _, f in ipairs(type(v.books) == "table" and v.books or {}) do
+            if type(f) == "string" then out.books[#out.books + 1] = f end
+        end
+    end
+    return out
+end
+
+local function migrateQuoteFrom()
+    local mode, coll = A.get("quote_from", nil), A.get("quote_coll", nil)
+    if mode == nil and coll == nil then return end
+    if (mode == "only" or mode == "except") and type(coll) == "string" and coll ~= "" then
+        local key = mode == "only" and "quote_inc" or "quote_exc"
+        local sel = quoteSelRaw(key)
+        sel.colls[#sel.colls + 1] = coll
+        A.set(key, sel)
+    end
+    A.set("quote_from", nil)
+    A.set("quote_coll", nil)
+end
+
+local function selKey(which, name)
+    return (name or "quote") .. (which == "exc" and "_exc" or "_inc")
+end
+
+--- What's ticked under Include ("inc") or Exclude ("exc") for card `name`.
+function D.quoteSel(which, name)
+    migrateQuoteFrom()
+    return quoteSelRaw(selKey(which, name))
+end
+
+--- Tick or untick a collection (kind "colls") or a book ("books").
+function D.quoteToggle(which, kind, value, name)
+    local key = selKey(which, name)
+    local sel = D.quoteSel(which, name)
+    local list, found = {}, false
+    for _, v in ipairs(sel[kind]) do
+        if v == value then found = true else list[#list + 1] = v end
+    end
+    if not found then list[#list + 1] = value end
+    sel[kind] = list
+    A.set(key, (#sel.colls + #sel.books > 0) and sel or nil)
+end
+
+--- Is it ticked?
+function D.quoteTicked(which, kind, value, name)
+    for _, v in ipairs(D.quoteSel(which, name)[kind]) do if v == value then return true end end
+    return false
+end
+
+-- The files a selection stands for (its books and its collections' books),
+-- and whether anything in it still exists.
+local function selFiles(sel)
+    local set, any = {}, false
+    for _, f in ipairs(sel.books) do set[f] = true; any = true end
+    for _, c in ipairs(sel.colls) do
+        local cs = D.collectionSet(c)
+        if cs then
+            any = true
+            for f in pairs(cs) do set[f] = true end
+        end
+    end
+    return set, any
+end
+
+--- Returns a test fp -> true when that book may be quoted, and a key that
+--- changes whenever the answer could (the ticks, or a collection's books);
+--- or nil when every book may be (nothing ticked, or only collections that
+--- are gone).
+function D.quoteFilter(name)
+    local inc, inc_any = selFiles(D.quoteSel("inc", name))
+    local exc, exc_any = selFiles(D.quoteSel("exc", name))
+    if not inc_any and not exc_any then return nil end
+    local function keyOf(set)
+        local files = {}
+        for f in pairs(set) do files[#files + 1] = f end
+        table.sort(files)
+        return table.concat(files, "\n")
+    end
+    return function(fp)
+        if exc[fp] then return false end
+        if inc_any then return inc[fp] == true end
+        return true
+    end, (inc_any and ("+" .. keyOf(inc)) or "") .. "|" .. (exc_any and ("-" .. keyOf(exc)) or "")
+end
+
+--- A highlight's colour as KOReader names it ("yellow", "gray"…), or nil for
+--- one without (made before KOReader had colours: never left out).
+function D.hlColour(c)
+    if type(c) ~= "string" or not c:match("%S") then return nil end
+    c = c:lower():match("^%s*(.-)%s*$")
+    if c == "grey" then c = "gray" end
+    return c
+end
+
+--- The highlight colours card `name` leaves out (<name>_skip_colors, a list
+--- of names): a set and a key that changes with it, or nil for none.
+function D.quoteSkipColours(name)
+    local list = A.get((name or "quote") .. "_skip_colors", nil)
+    if type(list) ~= "table" or #list == 0 then return nil end
+    local set, names = {}, {}
+    for _, c in ipairs(list) do
+        c = D.hlColour(c)
+        if c and not set[c] then set[c] = true; names[#names + 1] = c end
+    end
+    if #names == 0 then return nil end
+    table.sort(names)
+    return set, table.concat(names, ",")
+end
+
+--- May this highlight be quoted? (its colour isn't left out)
+function D.quoteColourOk(h, skip)
+    if skip == nil then skip = D.quoteSkipColours() end
+    return not (skip and h and h.color and skip[h.color])
+end
+
+--- The colours of the highlights in the books the quote cards draw from,
+--- in KOReader's order (others after): for the settings.
+local KO_COLOURS = { "red", "orange", "yellow", "green", "olive", "cyan", "blue", "purple", "gray" }
+function D.highlightColours(name)
+    local seen = {}
+    local hl = D.highlights(nil, true)
+    for _, b in ipairs(hl and hl.books or {}) do
+        for _, e in ipairs(b.list) do if e.color then seen[e.color] = true end end
+    end
+    -- (a colour left out stays on the list, to be put back)
+    local skip = D.quoteSkipColours(name)
+    for c in pairs(skip or {}) do seen[c] = true end
+    local out = {}
+    for _, c in ipairs(KO_COLOURS) do if seen[c] then out[#out + 1] = c; seen[c] = nil end end
+    local rest = {}
+    for c in pairs(seen) do rest[#rest + 1] = c end
+    table.sort(rest)
+    for _, c in ipairs(rest) do out[#out + 1] = c end
+    return out
+end
+
 -- ─── your highlights ─────────────────────────────────────────────────────────
 -- Read from each book's sidecar (KOReader's "annotations", or the older
 -- "highlight" table), once per sidecar version: a sidecar only changes when
@@ -2935,6 +3140,7 @@ function D.highlightsOf(fp)
                     local note = type(a.note) == "string" and a.note:match("%S") and clipText(a.note) or nil
                     list[#list + 1] = { text = clipText(a.text), note = note,
                         chapter = type(a.chapter) == "string" and a.chapter or nil,
+                        color = D.hlColour(a.color),
                         datetime = type(a.datetime) == "string" and a.datetime or nil }
                 end
             end
@@ -3013,7 +3219,12 @@ D.hasQuotes = function() return true end
 
 local quoteSlot = deferred("quote", {
     ttl = 600,
-    key = function() return os.date("%Y-%m-%d") end,
+    -- (a new pick when the books it may quote change; see D.quoteFilter)
+    key = function()
+        local _, fkey = D.quoteFilter()
+        local _, ckey = D.quoteSkipColours()
+        return os.date("%Y-%m-%d") .. (fkey and ("|" .. fkey) or "") .. (ckey and ("|" .. ckey) or "")
+    end,
     sig = function(v) return v and tostring(v.text) .. tostring(v.filepath) or "" end,
 }, function()
     return A.host.quoteOfTheDay() or false
@@ -3216,7 +3427,7 @@ end
 -- highlight itself.
 function D.openQuote(ctx, fp, text)
     if not fp then return end
-    if A.get("quote_tap", "book") == "highlight" and text then
+    if A.get("quote_tap", "highlight") == "highlight" and text then
         return D.openAtHighlight(ctx, fp, text)
     end
     D.openBook(ctx, fp)

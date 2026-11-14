@@ -36,14 +36,21 @@ local floor, max, min = math.floor, math.max, math.min
 
 -- ─── finding things ──────────────────────────────────────────────────────────
 
-local _mods = {}
--- A module of Simple UI or KOReader, or nil when it is not there. Only hits
--- are remembered, so a module that loads later is still found.
+local _mods, _missed = {}, {}
+-- A module of Simple UI or KOReader, or nil when it is not there. A miss is
+-- tried again only after a minute (so a module that loads later is still
+-- found): looking for a file that isn't there searches every plugin's
+-- folder, and the cards ask for Simple UI's for every piece of text, which
+-- on ZenOS or full screen without Simple UI made each page turn search the
+-- disk hundreds of times.
 local function try(name)
-    local m = _mods[name]
-    if m then return m end
+    local m = _mods[name] or package.loaded[name]
+    if m then _mods[name] = m; return m end
+    local missed = _missed[name]
+    if missed and os.time() - missed < 60 then return nil end
     local ok, r = pcall(require, name)
-    if ok and r then _mods[name] = r; return r end
+    if ok and r then _mods[name] = r; _missed[name] = nil; return r end
+    _missed[name] = os.time()
     return nil
 end
 H.try = try
@@ -560,7 +567,10 @@ local function bookHighlights(fp)
         for _, a in ipairs(ann) do
             if type(a) == "table" and a.drawer then
                 local t = cleanText(a.text)
-                if t then list[#list + 1] = { text = t, chapter = type(a.chapter) == "string" and a.chapter or nil } end
+                if t then
+                    list[#list + 1] = { text = t, chapter = type(a.chapter) == "string" and a.chapter or nil,
+                        color = A.D.hlColour(a.color) }
+                end
             end
         end
     else
@@ -626,6 +636,18 @@ function H.highlightPos(fp, text)
 end
 
 -- { { fp, n } } for every book in the history with highlights, by file.
+-- A book's highlights that may be quoted: none in a colour left out
+-- (D.quoteSkipColours).
+local function quotableHighlights(fp, skip)
+    local list, title, author = bookHighlights(fp)
+    if skip then
+        local kept = {}
+        for _, h in ipairs(list) do if not (h.color and skip[h.color]) then kept[#kept + 1] = h end end
+        list = kept
+    end
+    return list, title, author
+end
+
 local function highlightCounts()
     local RH = try("readhistory")
     local DocSettings = try("docsettings")
@@ -644,12 +666,16 @@ local function highlightCounts()
             local mtime = ok and sidecar and lfs.attributes(sidecar, "modification")
             if mtime then
                 local c = counts[fp]
-                if not (type(c) == "table" and c.m == mtime) then
-                    c = { m = mtime, n = #(bookHighlights(fp)) }
+                -- (k: how many in each colour, for leaving colours out)
+                if not (type(c) == "table" and c.m == mtime and type(c.k) == "table") then
+                    local list = bookHighlights(fp)
+                    local k = {}
+                    for _, h in ipairs(list) do if h.color then k[h.color] = (k[h.color] or 0) + 1 end end
+                    c = { m = mtime, n = #list, k = k }
                     counts[fp] = c
                     changed = true
                 end
-                if (tonumber(c.n) or 0) > 0 then out[#out + 1] = { fp = fp, n = c.n } end
+                if (tonumber(c.n) or 0) > 0 then out[#out + 1] = { fp = fp, n = c.n, k = c.k } end
             end
         end
     end
@@ -711,6 +737,24 @@ end
 ---   shown (fp/hi is the pick for n) }
 function H.quoteOfTheDay()
     local books = highlightCounts()
+    -- only the books the quote cards may pick from (D.quoteFilter)
+    local allow = A.D and A.D.quoteFilter and A.D.quoteFilter()
+    if allow then
+        local kept = {}
+        for _, b in ipairs(books) do if allow(b.fp) then kept[#kept + 1] = b end end
+        books = kept
+    end
+    -- and how many of each book's highlights aren't in a colour left out
+    local skip, ckey = A.D.quoteSkipColours()
+    if skip then
+        local kept = {}
+        for _, b in ipairs(books) do
+            local n = b.n
+            for c, m in pairs(type(b.k) == "table" and b.k or {}) do if skip[c] then n = n - m end end
+            if n > 0 then kept[#kept + 1] = { fp = b.fp, n = n } end
+        end
+        books = kept
+    end
     local total = 0
     for _, b in ipairs(books) do total = total + b.n end
     if total == 0 then return false end
@@ -720,15 +764,17 @@ function H.quoteOfTheDay()
     local fp, hi = roll.fp, tonumber(roll.hi)
     local book
     for _, b in ipairs(books) do if b.fp == fp then book = b break end end
-    local fresh = not (roll.shown and book and hi and hi >= 0 and hi < book.n)
+    -- (a pick made with other colours left out counts its highlights differently)
+    local fresh = not (roll.shown and book and hi and hi >= 0 and hi < book.n and roll.ck == ckey)
     local list, title, author
     if fresh then
         -- never the quote just shown (the same text, from either picker): the
         -- book's next highlight, or another book when that was its only one
+        local skip_c = skip
         local skip
         for attempt = 0, 5 do
             fp, hi = pickQuote(books, total, today, roll, attempt, skip)
-            list, title, author = bookHighlights(fp)
+            list, title, author = quotableHighlights(fp, skip_c)
             if #list > 0 then
                 hi = hi % #list
                 if not (roll.th and hash(list[hi + 1].text) == roll.th) then break end
@@ -737,14 +783,14 @@ function H.quoteOfTheDay()
             end
         end
     else
-        list, title, author = bookHighlights(fp)
+        list, title, author = quotableHighlights(fp, skip)
     end
     if #list == 0 then return false end
     hi = hi % #list
     if fresh then
         local streak = (fp == roll.fp) and ((tonumber(roll.streak) or 0) + 1) or 1
         A.set("quote_roll", { day = today, n = roll.n or 0, fp = fp, hi = hi, th = hash(list[hi + 1].text),
-            streak = streak, shown = true })
+            streak = streak, shown = true, ck = ckey })
     end
     local h = list[hi + 1]
     return { text = h.text, chapter = h.chapter, filepath = fp,
@@ -1031,13 +1077,34 @@ end
 local function engine() return package.loaded["engines/sui_screen_engine"] or try("engines/sui_screen_engine") end
 
 -- Is `screen` (a Simple UI ScreenWidget) open and in front?
+-- Is the screen the window in front: nothing that covers the whole screen
+-- (a book, another home screen) above it?
+local function inFront(screen)
+    local UIManager = require("ui/uimanager")
+    local stack = UIManager._window_stack
+    if type(stack) ~= "table" then return false end
+    for i = #stack, 1, -1 do
+        local w = stack[i] and stack[i].widget
+        if w == screen or (type(w) == "table" and w[1] == screen) then return true end
+        if type(w) == "table" and w.covers_fullscreen then return false end
+    end
+    return false
+end
+
 local function live(screen)
     if type(screen) ~= "table" then return false end
     local SE = engine()
     if SE and SE.getInstance and screen._id ~= nil and SE.getInstance(screen._id) ~= screen then return false end
     if type(screen.isActive) == "function" then
         local ok, active = pcall(screen.isActive, screen)
-        if ok and not active then return false end
+        -- Simple UI calls its screen inactive while it's parked under a book.
+        -- With Bookshelf installed too, it can stay marked parked after the
+        -- book closed, though it's on screen: the Dashboard's tabs and the
+        -- Control centre's buttons then changed nothing you could see. What
+        -- counts is whether it's in front.
+        if ok and not active and not (screen._parked and not screen._suspended and inFront(screen)) then
+            return false
+        end
     end
     return true
 end
@@ -1055,6 +1122,7 @@ local function reading()
     local RUI = package.loaded["apps/reader/readerui"]
     return RUI and RUI.instance and true or false
 end
+H.reading = reading
 
 --- Redraw every open Simple UI screen (a theme or accent changed).
 function H.redrawAll()

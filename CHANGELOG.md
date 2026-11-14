@@ -1,5 +1,94 @@
 # Changelog
 
+## 1.5.1
+
+- **A tapped day of the calendar** (the Calendar page, Week in covers) opens
+  a card of its own: the date, and a book read that day with its cover,
+  title, author and status (Reading, Finished, On hold), the time read, the
+  pages, and how far through the book the day got. With more than one book,
+  the arrows (or a swipe left or right) go through them. Tap the book to
+  open it; tap outside the card, the X or Back to close it. A downloaded
+  style dresses the cover as on Continue reading. It opens, turns and closes
+  with a flashing refresh, so it leaves no ghost on the calendar.
+- **Black and white.** Styles and colours > **Screen**: Automatic (the
+  default: black and white on a greyscale reader), Colour, or Black and
+  white. In black and white the accent pickers offer four shades instead of
+  colours: Black, Dark grey, Grey and Light grey (on dark cards they go from
+  white to a dark grey). A colour picked before gives way to Black and Grey.
+  The shades are in the list on colour screens too.
+- **Font.** With a style set in a serif (Dark Academia, Gothic, Forest,
+  Ocean, Space), Styles and colours > **Font** keeps it, or uses your UI
+  font instead.
+- **Count each book once** (Tools > Reading Log > Your reading, and the
+  settings of the cards that count finished books; on unless turned off).
+  KOReader's statistics can hold the same book twice, when its file changed
+  (Calibre rewrote its metadata, a new download, a converted copy,
+  statistics synced from another reader), and with "What counts as
+  finished" on Read to the end or Either both copies counted, doubling the
+  Year goal and Year in covers. With this on, a book with the same title and
+  author counts once, at its latest read-through; so does a book with two
+  copies of its file.
+- **Choose which books the quotes come from.** A quote card's settings >
+  This card quotes from has **Include** and **Exclude**, each a list of your
+  collections and of the books with highlights to tick. Include ticks quote
+  only from those books (nothing ticked: every book); Exclude ticks are never
+  quoted, even when included. Each quote card has its own (Quote of the day
+  from your favourites, the second one from everything else, say), and the
+  cards still never show the same highlight at once. Books added to a ticked
+  collection later count straight away; a deleted collection is just
+  ignored.
+- **A tapped quote opens the book at that highlight** now unless you choose
+  otherwise (Tapping a quote opens > The book, where you left off). Before,
+  it opened where you left off unless you'd changed it.
+- **Highlight colours for the quotes.** A quote card's settings >
+  **Highlight colours** lists the colours your highlights use; untick one
+  and its highlights stay off that quote card (say, the red ones you use
+  for names or words to look up). Highlights made before KOReader had
+  colours are always quoted.
+- **Tidier card settings.**
+  - Card colour is one button now, beside Styles and colours, instead of
+    four buttons under a heading (on every card).
+  - On Year goal, Year in covers, Recently finished and Finish speed, "A
+    book counts as finished when" and "Count each book once" are behind one
+    button, What counts as finished, which shows the choice.
+  - Each card's own settings come first, then how it looks, then what a tap
+    does (Quote of the day's look and the dot colours on Finish speed and
+    Decades had been in among their own settings).
+  - Styles and colours: the two accent colours share a row.
+- Fixed: a setting's value cut short in a menu (Card colour: Звичайний, …)
+  could break a letter in two in Ukrainian, Spanish, French and the other
+  languages with accents. It's cut by letters now.
+- Fixed: with Simple UI and Bookshelf both installed, the Dashboard's tabs
+  and the Control centre's buttons could seem to do nothing, or catch up
+  slowly a tap behind. Simple UI can keep its Home marked as hidden under a
+  book after the book closed, and Reading Log didn't redraw a card on a
+  hidden screen. Now it redraws whenever the Home is in front.
+- **A quicker Dashboard on ZenOS and full screen** (and quicker pages on
+  Simple UI and Bookshelf too).
+  - Each page is kept as a finished picture once drawn, so turning back to
+    it is a single copy onto the screen instead of every card drawn again.
+    A page with a clock keeps its cards' pictures instead, so only the clock
+    is drawn again. Up to six screens' worth are kept (about 12 MB on a
+    greyscale reader, 51 MB on a Libra Colour); one not used for ten minutes
+    is let go of.
+  - All six pages are kept ready, and a page is drawn again only when
+    something on it may have changed.
+  - A few seconds after a page turn, the pages either side of it are drawn
+    and painted ahead, one at a time while nothing else is going on, so the
+    next tab is instant too.
+  - A tab whose page still has to be drawn flashes dark the moment it's
+    tapped, so you can see the tap was taken.
+  - Without Simple UI (ZenOS, full screen), every piece of text looked for
+    one of Simple UI's files on the disk, hundreds of times a page. A file
+    that isn't there is now looked for at most once a minute.
+  - Reading trends are worked out once a day (and again after reading), not
+    on every page turn.
+- Fixed: on ZenOS, a Dashboard tab could seem to do nothing, then switch
+  seconds later (or a tap behind). ZenOS holds back its Home's redraws while
+  its update check runs in the background, which it does after waking with
+  Wi-Fi on and again and again while the check fails. The Dashboard now
+  puts its page on screen straight away meanwhile.
+
 ## 1.5.0
 
 - **A style's cards on your home screen's own background.** Styles with

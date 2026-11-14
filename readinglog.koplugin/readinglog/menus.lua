@@ -34,7 +34,10 @@ local function Config() return H.try("infra/sui_config") end
 
 local function shorten(v, n)
     v = tostring(v)
-    if #v > n then return v:sub(1, n - 1) .. ELLIPSIS end
+    -- (by characters, not bytes: never cut a letter in two)
+    local chars = {}
+    for ch in v:gmatch("[%z\1-\127\194-\244][\128-\191]*") do chars[#chars + 1] = ch end
+    if #chars > n then return table.concat(chars, "", 1, n - 1) .. ELLIPSIS end
     return v
 end
 
@@ -394,7 +397,7 @@ end
 local function accentOptions(with_matched)
     local out = {}
     if with_matched then out[1] = { "matched", T("Matched to the first") } end
-    for _, id in ipairs(A.ACCENT_ORDER) do out[#out + 1] = { id, A.ACCENTS[id].label } end
+    for _, id in ipairs(A.accentOrder()) do out[#out + 1] = { id, A.ACCENTS[id].label } end
     return out
 end
 
@@ -429,7 +432,19 @@ function S.lookMenu(mctx)
                         return A.ACCENTS[v] and v or "matched"
                     end,
                     function(v) A.set("accent2", v ~= "matched" and v or nil) end, after),
+                -- black and white: shades of grey in the pickers
+                radioItem(T("Screen"), function()
+                        return { { "auto", T("Automatic") }, { "color", T("Colour") }, { "bw", T("Black and white") } }
+                    end, A.screenMode,
+                    function(v) A.set("screen_mode", v ~= "auto" and v or nil) end, after),
             }
+            -- a style set in a serif of its own: it, or the reader's UI font
+            if A.THEMES[A.themeId()].serif then
+                items[#items + 1] = radioItem(T("Font"),
+                    function() return { { "style", T("The style's") }, { "ui", T("Your UI font") } } end,
+                    function() return A.get("style_font", "style") == "ui" and "ui" or "style" end,
+                    function(v) A.set("style_font", v ~= "style" and v or nil) end, after)
+            end
             -- a style with its own page colour: it, or the home screen's
             if A.theme().page and A.THEMES[A.themeId()].own then
                 items[#items + 1] = radioItem(T("Behind the Dashboard's cards"),

@@ -84,7 +84,8 @@ function S.header(text) return { { text = text, enabled = false }, _sui = { kind
 -- A card's own settings in the same order on every card: what it shows,
 -- then how it looks, then what tapping part of it does. (Each heading and the
 -- rows under it move together; their order among themselves stays.)
-local LOOK_HEADS = { "Look", "Look, for both cover calendars", "Charts, on every card", "Style",
+local LOOK_HEADS = { "Look", "Look, for both cover calendars", "Look, for every quote card", "Dot colours",
+    "Charts, on every card", "Style",
     "Shape, for every rings card", "Heart colours", "A broken heart when you miss", "Streak ring fills at" }
 local TAP_HEADS = { "Tapping a quote opens", "Tapping a cover", "Tapping the cover" }
 function S.orderRows(rows)
@@ -98,7 +99,9 @@ function S.orderRows(rows)
         if head then
             into = (look[head] and parts[2]) or (tap[head] and parts[3]) or parts[1]
         end
-        into[#into + 1] = r
+        -- (a row that says where it goes: _part 1 is with the card's own rows)
+        local to = type(r) == "table" and r._part and parts[r._part] or into
+        to[#to + 1] = r
     end
     local out = {}
     for _, part in ipairs(parts) do for _, r in ipairs(part) do out[#out + 1] = r end end
@@ -124,7 +127,10 @@ end
 
 local function shorten(v, n)
     v = tostring(v)
-    if #v > n then return v:sub(1, n - 1) .. ELLIPSIS end
+    -- (by characters, not bytes: never cut a letter in two)
+    local chars = {}
+    for ch in v:gmatch("[%z\1-\127\194-\244][\128-\191]*") do chars[#chars + 1] = ch end
+    if #chars > n then return table.concat(chars, "", 1, n - 1) .. ELLIPSIS end
     return v
 end
 
@@ -1123,16 +1129,172 @@ end
 -- What counts as a finished book, for every card that counts them (one
 -- setting; also in Tools > Reading Log).
 function S.finishedRows(api, ctx)
-    return sharedLook(api, ctx, T("A book counts as finished when"), "finished_by",
-        { { "marked", T("Marked finished") }, { "read", T("Read to the end") }, { "either", T("Either") } })
+    local rows = { sharedLook(api, ctx, T("A book counts as finished when"), "finished_by",
+        { { "marked", T("Marked finished") }, { "read", T("Read to the end") }, { "either", T("Either") } }) }
+    -- the same book twice in the statistics (a new copy of its file)
+    rows[#rows + 1] = S.header(T("Count each book once"))
+    rows[#rows + 1] = S.radio(api, { { "on", T("On") }, { "off", T("Off") } },
+        A.get("merge_books", true) ~= false and "on" or "off", function(v)
+            A.set("merge_books", v == "off" and false or nil)
+            A.D.invalidate()
+            S.reloadAll(ctx)
+        end)
+    return unpack(rows)
 end
 
 -- what a tap on a quote opens, for every quote card
 local function quoteTap(api)
     return S.header(T("Tapping a quote opens")),
         S.radio(api, { { "book", T("The book, where you left off") }, { "highlight", T("The highlighted passage") } },
-            A.get("quote_tap", "book"), function(v) A.set("quote_tap", v ~= "book" and v or nil) end)
+            A.get("quote_tap", "highlight"), function(v) A.set("quote_tap", v ~= "highlight" and v or nil) end)
 end
+-- KOReader's highlight colours, by name
+local HL_COLOUR = { red = T("Red"), orange = T("Orange"), yellow = T("Yellow"), green = T("Green"),
+    olive = T("Olive"), cyan = T("Cyan"), blue = T("Blue"), purple = T("Purple"), gray = T("Grey") }
+local function colourName(c) return HL_COLOUR[c] or (c:sub(1, 1):upper() .. c:sub(2)) end
+
+-- Highlight colours: a tick for each colour your highlights use; a colour
+-- unticked is left out of this quote card (<name>_skip_colors).
+local function quoteColours(api, ctx, name)
+    local colours = D.highlightColours(name)
+    local skip = D.quoteSkipColours(name) or {}
+    local on, off = {}, 0
+    for _, c in ipairs(colours) do
+        if skip[c] then off = off + 1 else on[#on + 1] = colourName(c) end
+    end
+    local shown = off == 0 and T("All") or #on == 0 and T("None") or shorten(table.concat(on, ", "), 28)
+    return { { text = T("Highlight colours") .. ": " .. shown, callback = function()
+        api.close()
+        local function show()
+            S.open(ctx, T("Highlight colours"), function(sub)
+                local rows = { S.header(T("Only ticked colours are quoted.")) }
+                local now = D.quoteSkipColours(name) or {}
+                local line = {}
+                for _, c in ipairs(colours) do
+                    line[#line + 1] = { text = (now[c] and "" or CHECK) .. colourName(c), callback = function()
+                        local list = {}
+                        for k in pairs(now) do if k ~= c then list[#list + 1] = k end end
+                        if not now[c] then list[#list + 1] = c end
+                        table.sort(list)
+                        A.set(name .. "_skip_colors", #list > 0 and list or nil)
+                        sub.close()
+                        S.reloadAll(ctx)
+                        show()
+                    end }
+                    if #line == 3 then rows[#rows + 1] = line; line = {} end
+                end
+                if #line > 0 then rows[#rows + 1] = line end
+                if #colours == 0 then rows[#rows + 1] = S.header(T("None of your highlights has a colour yet.")) end
+                rows[#rows + 1] = { { text = T("Back"), callback = function() sub.close(); api.again() end } }
+                return rows
+            end)
+        end
+        show()
+    end } }
+end
+
+-- which books the quotes come from, each quote card its own (D.quoteFilter):
+-- Include (only these) and Exclude (never these), each a list of collections
+-- and books to tick
+
+-- The books that could be quoted (they have highlights), and any ticked,
+-- by title: { { fp, label } }
+local function quoteBookList(which, name)
+    local seen, out = {}, {}
+    local hl = D.highlights(nil, true)
+    local function add(fp)
+        if seen[fp] then return end
+        seen[fp] = true
+        local info = D.info(fp)
+        local label = info.title or fp:match("[^/]+$")
+        if info.author and info.author ~= "" then label = label .. " \xE2\x80\x94 " .. info.author end
+        out[#out + 1] = { fp, label, (info.title or ""):lower() }
+    end
+    for _, b in ipairs(hl and hl.books or {}) do add(b.fp) end
+    for _, fp in ipairs(D.quoteSel(which, name).books) do add(fp) end
+    table.sort(out, function(a, b) return a[3] < b[3] end)
+    return out
+end
+
+local function bookRows(ctx, which, api, name)
+    local rows = {}
+    for _, b in ipairs(quoteBookList(which, name)) do
+        local fp = b[1]
+        rows[#rows + 1] = { { text = (D.quoteTicked(which, "books", fp, name) and CHECK or "") .. shorten(b[2], 48), callback = function()
+            D.quoteToggle(which, "books", fp, name)
+            api.changed()
+        end } }
+    end
+    if #rows == 0 then rows[1] = S.header(T("None of your books has highlights yet.")) end
+    return rows
+end
+
+local selDialog
+local function selRows(ctx, which, api, back, name)
+    local rows = {
+        S.header(which == "inc" and T("Quote only from what's ticked. Nothing ticked: every book.")
+            or T("Never quote from what's ticked.")),
+        S.header(T("Collections")),
+    }
+    local names = D.collections()
+    local line = {}
+    for _, c in ipairs(names) do
+        line[#line + 1] = { text = (D.quoteTicked(which, "colls", c, name) and CHECK or "") .. shorten(D.collectionLabel(c), 22), callback = function()
+            D.quoteToggle(which, "colls", c, name)
+            api.changed()
+        end }
+        if #line == 2 then rows[#rows + 1] = line; line = {} end
+    end
+    if #line > 0 then rows[#rows + 1] = line end
+    if #names == 0 then rows[#rows + 1] = S.header(T("No collections yet. Make one in KOReader's file browser.")) end
+    local n = #D.quoteSel(which, name).books
+    local label = T("Books")
+    local books = { { text = label .. ": " .. (n == 0 and T("None") or A.tr("%1 ticked", n)) .. ELLIPSIS, callback = function()
+        api.close()
+        local function reopen() selDialog(ctx, which, back, name) end
+        S.open(ctx, label, function(sub)
+            local r = bookRows(ctx, which, sub, name)
+            r[#r + 1] = { { text = T("Back"), callback = function() sub.close(); reopen() end } }
+            return r
+        end)
+    end } }
+    -- as a menu: the books one level down
+    books._sui = { kind = "submenu", label = label, rows_fn = function() return bookRows(ctx, which, api, name) end }
+    rows[#rows + 1] = books
+    return rows
+end
+
+selDialog = function(ctx, which, back, name)
+    S.open(ctx, which == "inc" and T("Include") or T("Exclude"), function(sub)
+        local rows = selRows(ctx, which, sub, back, name)
+        rows[#rows + 1] = { { text = T("Back"), callback = function() sub.close(); if back then back() end end } }
+        return rows
+    end, true)
+end
+
+local function quoteSelRow(api, ctx, which, name)
+    local label = which == "inc" and T("Include") or T("Exclude")
+    local sel = D.quoteSel(which, name)
+    local names = {}
+    for _, c in ipairs(sel.colls) do names[#names + 1] = D.collectionLabel(c) end
+    for _, fp in ipairs(sel.books) do names[#names + 1] = D.info(fp).title or fp:match("[^/]+$") end
+    local shown = #names > 0 and shorten(table.concat(names, ", "), 26)
+        or (which == "inc" and T("Every book") or T("Nothing"))
+    local row = { { text = label .. ": " .. shown .. ELLIPSIS, callback = function()
+        api.close()
+        selDialog(ctx, which, function() api.again() end, name)
+    end } }
+    row._sui = { kind = "submenu", label = label, rows_fn = function() return selRows(ctx, which, api, nil, name) end }
+    return row
+end
+
+local function quoteBooks(api, ctx, name)
+    return S.header(T("This card quotes from")),
+        quoteSelRow(api, ctx, "inc", name),
+        quoteSelRow(api, ctx, "exc", name),
+        quoteColours(api, ctx, name)
+end
+
 local function calendarLook(api, ctx)
     return sharedLook(api, ctx, T("Look, for both cover calendars"), "calendar_look",
         { { "plain", T("Plain") }, { "polaroid", T("Polaroids") }, { "brackets", T("Brackets") }, { "gilt", T("Gilt frames") } })
@@ -1149,6 +1311,7 @@ ROWS.quote = function(env, api, ctx)
         end } },
         h1, r1,
         h2, r2,
+        quoteBooks(api, ctx, "quote"),
     }
 end
 
@@ -1164,6 +1327,7 @@ for _, name in ipairs{ "quote2", "quote3", "quote4" } do
             end } },
             h1, r1,
             h2, r2,
+            quoteBooks(api, ctx, name),
         }
     end
 end
@@ -1391,7 +1555,7 @@ local function accentPicker(ctx, title, key, current, auto_label, back)
             rows[#rows + 1] = { { text = ((A.get(key, nil) == nil) and CHECK or "") .. auto_label, callback = choose(nil) } }
         end
         local row = {}
-        for _, id in ipairs(A.ACCENT_ORDER) do
+        for _, id in ipairs(A.accentOrder()) do
             row[#row + 1] = { text = ((id == current) and CHECK or "") .. A.ACCENTS[id].label, callback = choose(id) }
             if #row == 3 then rows[#rows + 1] = row; row = {} end
         end
@@ -1416,16 +1580,28 @@ function S.look(ctx, back, o)
             S.radio(api, colours, colour_on, A.setColours),
             -- Two accent colours, used for labels, rings, bars and buttons.
             -- A card's own "Card colour" setting decides which of the two leads.
-            { { text = T("Accent colour: ") .. A.ACCENTS[a1].label, callback = function()
+            -- (side by side on one row)
+            { { text = T("Accent colour: ") .. shorten(A.ACCENTS[a1].label, 16), callback = function()
                 api.close()
                 accentPicker(ctx, T("Accent colour"), "accent", a1, nil, again)
-            end } },
-            { { text = T("Second accent: ") .. A.ACCENTS[a2].label .. (matched and T(" (matched)") or ""), callback = function()
+              end },
+              { text = T("Second accent: ") .. shorten(A.ACCENTS[a2].label .. (matched and T(" (matched)") or ""), 22), callback = function()
                 api.close()
                 accentPicker(ctx, T("Second accent"), "accent2", (not matched) and a2 or nil,
                     T("Matched to the first"), again)
-            end } },
+              end } },
         }
+        -- Black and white: the colour pickers offer shades of grey only
+        rows[#rows + 1] = S.header(T("Screen"))
+        rows[#rows + 1] = S.radio(api, { { "auto", T("Automatic") }, { "color", T("Colour") }, { "bw", T("Black and white") } },
+            A.screenMode(), function(v) A.set("screen_mode", v ~= "auto" and v or nil) end)
+        -- A style set in a serif of its own: it, or the reader's UI font
+        if A.THEMES[A.themeId()].serif then
+            rows[#rows + 1] = S.header(T("Font"))
+            rows[#rows + 1] = S.radio(api, { { "style", T("The style's") }, { "ui", T("Your UI font") } },
+                A.get("style_font", "style") == "ui" and "ui" or "style",
+                function(v) A.set("style_font", v ~= "style" and v or nil) end)
+        end
         -- The space around the Dashboard's page
         if o.tools then
         rows[#rows + 1] = S.header(T("Dashboard margin"))
@@ -1709,15 +1885,34 @@ function S.card(name, ctx, env_fn, back)
                     S.tapChooser(ctx, name, show)
                 end } }
             end
-            rows[#rows + 1] = S.header(T("Card colour"))
+            -- its colour (Plain, Tinted, accents swapped) and every card's
+            -- style, side by side on one row
             local tones = toneOptions()
-            local function pickTone(v) A.set(name .. "_tone", v) end
-            rows[#rows + 1] = S.radio(api, { tones[1], tones[2] }, env.tone.name, pickTone)
-            rows[#rows + 1] = S.radio(api, { tones[3], tones[4] }, env.tone.name, pickTone)
-            rows[#rows + 1] = { { text = T("Styles and colours") .. ELLIPSIS, callback = function()
-                api.close()
-                S.look(ctx, show)
-            end } }
+            local tone_label = tones[1][2]
+            for _, t in ipairs(tones) do if t[1] == env.tone.name then tone_label = t[2] end end
+            rows[#rows + 1] = {
+                { text = T("Card colour") .. ": " .. shorten(tone_label, 22) .. ELLIPSIS, callback = function()
+                    api.close()
+                    S.open(ctx, T("Card colour"), function(sub)
+                        local list = {}
+                        local now = env_fn().tone.name
+                        for _, t in ipairs(tones) do
+                            list[#list + 1] = { { text = ((t[1] == now) and CHECK or "") .. t[2], callback = function()
+                                A.set(name .. "_tone", t[1])
+                                sub.close()
+                                reload(ctx)
+                                show()
+                            end } }
+                        end
+                        list[#list + 1] = { { text = T("Back"), callback = function() sub.close(); show() end } }
+                        return list
+                    end)
+                end },
+                { text = T("Styles and colours") .. ELLIPSIS, callback = function()
+                    api.close()
+                    S.look(ctx, show)
+                end },
+            }
             if back then
                 rows[#rows + 1] = { { text = T("Back"), callback = function() api.close(); back() end } }
             end
@@ -1792,14 +1987,30 @@ function S.pickBookForDates(ctx)
     UIManager:show(menu)
 end
 
--- what counts as finished, on the cards that count finished books
+-- what counts as finished, on the cards that count finished books: one row
+-- that opens both settings (they're shared with Tools > Your reading)
+local FINISHED_BY = { marked = T("Marked finished"), read = T("Read to the end"), either = T("Either") }
+local function finishedRow(api, ctx)
+    local label = T("What counts as finished")
+    local shown = FINISHED_BY[A.get("finished_by", "marked")] or FINISHED_BY.marked
+    local row = { { text = label .. ": " .. shorten(shown, 24) .. ELLIPSIS, callback = function()
+        api.close()
+        S.open(ctx, label, function(sub)
+            local rows = { S.finishedRows(sub, ctx) }
+            rows[#rows + 1] = { { text = T("Back"), callback = function() sub.close(); api.again() end } }
+            return rows
+        end)
+    end } }
+    -- as a menu: the two settings one level down
+    row._sui = { kind = "submenu", label = label, rows_fn = function() return { S.finishedRows(api, ctx) } end }
+    row._part = 1
+    return row
+end
 for _, name in ipairs{ "goal", "finished", "year_covers", "finish_speed" } do
     local own = ROWS[name]
     ROWS[name] = function(env, api, ctx)
         local rows = own and own(env, api, ctx) or {}
-        local h1, r1 = S.finishedRows(api, ctx)
-        rows[#rows + 1] = h1
-        rows[#rows + 1] = r1
+        rows[#rows + 1] = finishedRow(api, ctx)
         return rows
     end
 end

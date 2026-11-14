@@ -82,6 +82,7 @@ function Box:build()
         repaint = function(o) box:repaint(o) end,
         close = self.close and function() box:close() end or nil,
         openBook = self.own and self.own.openBook or nil,
+        box = self,
         showDetails = self.own and self.own.showDetails or nil,
     }
     self.ctx = ctx
@@ -106,6 +107,20 @@ end
 -- just put it back on screen: when it's painted, a card whose figures have
 -- changed since it was drawn draws itself again, a moment later.
 function Box:paintTo(bb, x, y)
+    -- the Dashboard: what is under it on screen, kept (one copy, reused), so
+    -- a page drawn ahead can be painted over the same and kept as a picture
+    if self.panel == "dashboard" then
+        pcall(function()
+            local w, h = self.w, self.h
+            local u = self._under
+            if not (u and u:getWidth() == w and u:getHeight() == h and u:getType() == bb:getType()) then
+                if u then u:free() end
+                u = require("ffi/blitbuffer").new(w, h, bb:getType())
+                self._under = u
+            end
+            u:blitFrom(bb, 0, 0, x, y, w, h)
+        end)
+    end
     InputContainer.paintTo(self, bb, x, y)
     if not (D.changeKey and self._key) or self._recheck then return end
     local ok, k = pcall(D.changeKey)
@@ -437,6 +452,18 @@ local function homeShown()
     return true
 end
 
+-- Is the topmost window (passing over toasts) an invisible one, such as the
+-- one a check running in the background puts up to catch a tap?
+local function underInvisible()
+    local stack = UIManager()._window_stack
+    if type(stack) ~= "table" then return false end
+    for i = #stack, 1, -1 do
+        local w = stack[i] and stack[i].widget
+        if w and not w.toast then return w.invisible == true end
+    end
+    return false
+end
+
 local function zenBuilder(name)
     local def_title = name == "dashboard" and A._("Dashboard") or A.panels[name].title
     return function(zctx)
@@ -464,6 +491,22 @@ local function zenBuilder(name)
                 -- changed (not on a page turn: one screen update is quicker,
                 -- above all on a slower e-reader)
                 zctx.refreshRow(region)
+                -- Zen holds its Home's repaints while something is over it,
+                -- even an invisible window: its own update check puts one up
+                -- for as long as it runs (seconds, again and again without a
+                -- connection), and a page turned meanwhile stayed on the old
+                -- page until it finished. Under an invisible window the card
+                -- is put on screen straight away.
+                if underInvisible() then
+                    local d = b.dimen
+                    if d and d.x and d.w and d.w > 0 then
+                        pcall(function()
+                            b:paintTo(Screen().bb, d.x, d.y)
+                            UIManager():setDirty(nil, function() return kind == "flashui" and "flashui" or "ui", region end)
+                        end)
+                        return
+                    end
+                end
                 if kind == "flashui" then
                     UIManager():setDirty(nil, function() return kind, region end)
                 end

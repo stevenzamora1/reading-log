@@ -498,6 +498,7 @@ local function buildDashboard(ctx, w, h)
     local ts = textScale()
     local gap = max(6, floor(min(w, h) * 0.016 + 0.5))
     local tabs, pages = dashTabs()
+    local kids = {}
     local page_i = currentPage(tabs)
     local page = pages[page_i]
 
@@ -654,6 +655,7 @@ local function buildDashboard(ctx, w, h)
         local ok, hc = pcall(P.heading, env, kicker, pageLabel(page), nav)
         if ok and hc then
             hc.cache_me = true
+            kids[#kids + 1] = hc
             c:sub(hc, ox, oy + y, "heading|")
         end
         y = y + head_h + floor(gap * 0.6)
@@ -673,6 +675,7 @@ local function buildDashboard(ctx, w, h)
             local env = makeEnv(name, ctx, width, rh, { nested = true, slot = 1, page = page_look, see = see, page_heading = heading })
             local child = buildPanel(name, env)
             child.cache_me = not P[name].tick
+            kids[#kids + 1] = child
             c:sub(child, ox + x, oy + y, name .. "|")
             if P[name].tick then c.clock_y, c.clock_h = oy + y, rh end
             -- the rest of the panel: a plain tap on it
@@ -681,6 +684,15 @@ local function buildDashboard(ctx, w, h)
         y = y + rh + gap
     end
     A.state.dash_tabs = tabs
+    -- A page without a clock is kept as one picture (see the paint cache in
+    -- init.lua): turning back to it is a single copy onto the screen, not
+    -- every card drawn again. Its cards then aren't kept on their own too.
+    -- (A page with a clock changes every minute: its cards are kept instead,
+    -- so only the clock is drawn again.)
+    if not c.clock_y then
+        c.cache_me = true
+        for _, k in ipairs(kids) do k.cache_me = false end
+    end
     return c
 end
 
@@ -708,6 +720,130 @@ local Dashboard = {
 -- page on this month again.
 local _seen_screens = setmetatable({}, { __mode = "k" })
 
+-- Pages already drawn, on a screen of Reading Log's own (ZenOS's Home, the
+-- full-screen Dashboard): turning back to one of the last few is instant
+-- instead of drawing it again. A page is drawn again once anything it shows
+-- may have changed (new figures, the statistics, a setting, night mode, the
+-- minute on a page with the clock), or while its covers are still coming.
+local _pages = {}
+-- (every page of a Dashboard as it comes: its pictures are kept too)
+local function pagesKeep() return 6 end
+local function pageKey(ctx, w, h)
+    if type(ctx) ~= "table" or type(ctx.own) ~= "table" then return nil end
+    local okk, ck = pcall(function() return D.changeKey and D.changeKey() or "" end)
+    return table.concat({ tostring(ctx.mod_id), w, h, tostring(A.state.dash_page), tostring(A.state.month_offset),
+        tostring(A.state.year_offset), tostring(D.gen or 0), tostring(A.epoch or 0), okk and ck or tostring(os.time()),
+        A.night() and "n" or "d", ctx.close_button and "f" or "h" }, "|")
+end
+function Dashboard.dropPages() _pages = {} end
+
+-- Is page `page` already drawn (turning to it is instant)?
+local function pageReady(ctx, page)
+    local saved = A.state.dash_page
+    A.state.dash_page = page
+    local w = max(80, floor(tonumber(ctx.width) or 400))
+    local h = (ctx.height and ctx.height > 0) and floor(ctx.height) or floor(w * 1.2)
+    local key = pageKey(ctx, w, h)
+    A.state.dash_page = saved
+    if not key then return false end
+    local minute = os.date("%Y%m%d%H%M")
+    for _, e in ipairs(_pages) do
+        if e.key == key and (not e.clock or e.minute == minute) then return true end
+    end
+    return false
+end
+
+-- A tab tapped while its page still has to be drawn: the tab flashes dark at
+-- once, so you can see the tap was taken (drawing the page can take a moment
+-- on a slower e-reader).
+local function tabFeedback(ctx, i)
+    local box = (type(ctx.own) == "table" and ctx.own.box) or ctx._box
+    local d = box and box.dimen
+    if not (d and d.x) then return end
+    local r
+    for _, x in ipairs(ctx._regions or {}) do if x.id == "tab:" .. i then r = x end end
+    if not r then return end
+    pcall(function()
+        local UIManager = require("ui/uimanager")
+        local Screen = require("device").screen
+        local Geom = require("ui/geometry")
+        local g = Geom:new{ x = floor(d.x + r.x), y = floor(d.y + r.y), w = floor(r.w), h = floor(r.h) }
+        Screen.bb:invertRect(g.x, g.y, g.w, g.h)
+        UIManager:setDirty(nil, "fast", g)
+        UIManager:forceRePaint()
+    end)
+end
+
+-- The pages either side of the one on screen, drawn ahead while nothing else
+-- is going on (ZenOS's Home, the full-screen Dashboard), so turning to them
+-- is instant. One page at a time, a few seconds after the last page turn;
+-- skipped while a book is open or the Dashboard isn't on screen.
+local _ahead = { job = nil, busy = false }
+local function pageCtx(ctx, page)
+    return { width = ctx.width, height = ctx.height, mod_id = ctx.mod_id, own = ctx.own,
+        close_button = ctx.close_button, cover_owner = tostring(ctx.mod_id) .. "_ahead", ahead = true }
+end
+local function drawAhead(ctx)
+    local UIManager = require("ui/uimanager")
+    if _ahead.job then UIManager:unschedule(_ahead.job) end
+    local function job()
+        _ahead.job = nil
+        local box = ctx.own and ctx.own.box
+        if not (box and box:isActive()) or H.reading and H.reading() then return end
+        local tabs = A.state.dash_tabs or {}
+        local order, here = {}, nil
+        for _, t in ipairs(tabs) do
+            if t.kind == "page" then
+                order[#order + 1] = t.page
+                if t.page == A.state.dash_page then here = #order end
+            end
+        end
+        if not here then return end
+        -- the next page, then the one before
+        for _, i in ipairs({ here + 1, here - 1 }) do
+            local page = order[i]
+            if page then
+                local saved = { A.state.dash_page, A.state.nav_for, A.state.dash_tabs }
+                A.state.dash_page = page
+                local pctx = pageCtx(ctx, page)
+                local w = max(80, floor(tonumber(ctx.width) or 400))
+                local h = (ctx.height and ctx.height > 0) and floor(ctx.height) or floor(w * 1.2)
+                local key = pageKey(pctx, w, h)
+                local have = false
+                for _, e in ipairs(_pages) do if e.key == key then have = true break end end
+                local drawn = false
+                if not have then
+                    _ahead.busy = true
+                    -- (A.drawFor answers ok, the page)
+                    local okr, okd, pc = pcall(A.drawFor, pctx.cover_owner, function() return Dashboard.render(pctx) end)
+                    if not okd then pc = nil end
+                    -- and painted, over what is under the Dashboard on screen,
+                    -- so its picture is kept too: turning to it is one copy
+                    local under = box._under
+                    if okr and type(pc) == "table" and pc.cache_me and under then
+                        pcall(function()
+                            local bb = under:copy()
+                            pc:paintTo(bb, 0, 0)
+                            bb:free()
+                        end)
+                    end
+                    _ahead.busy = false
+                    drawn = true
+                end
+                A.state.dash_page, A.state.nav_for, A.state.dash_tabs = saved[1], saved[2], saved[3]
+                if drawn then
+                    -- one page per go: the other a moment later
+                    _ahead.job = job
+                    UIManager:scheduleIn(1.5, job)
+                    return
+                end
+            end
+        end
+    end
+    _ahead.job = job
+    UIManager:scheduleIn(3, job)
+end
+
 function Dashboard.render(ctx)
     local w = max(80, floor(tonumber(ctx.width) or 400))
     local h = (ctx.height and ctx.height > 0) and floor(ctx.height) or floor(w * 1.2)
@@ -716,10 +852,38 @@ function Dashboard.render(ctx)
         A.state.month_offset = 0
         A.state.year_offset = 0
     end
+    local key = pageKey(ctx, w, h)
+    local minute = os.date("%Y%m%d%H%M")
+    if key then
+        for i, e in ipairs(_pages) do
+            if e.key == key and (not e.clock or e.minute == minute) then
+                table.remove(_pages, i)
+                table.insert(_pages, 1, e)
+                A.state.nav_for, A.state.dash_tabs = e.nav_for, e.tabs
+                declareRegions(ctx, e.c)
+                H.wantTick(ctx, e.c.clock_y and { y = e.c.clock_y, h = e.c.clock_h } or nil)
+                if not ctx.ahead then drawAhead(ctx) end
+                return e.c
+            end
+        end
+    end
     local ok, c = pcall(buildDashboard, ctx, w, h)
     if not ok then return errorCard(A._("Dashboard"), w, h, c) end
     declareRegions(ctx, c)
     H.wantTick(ctx, c.clock_y and { y = c.clock_y, h = c.clock_h } or nil)
+    -- kept for turning back to it (not while covers are still being made)
+    local pend = D.cover_pending[ctx.cover_owner or ctx.mod_id]
+    -- (its key now: figures worked out while it was drawn are in it)
+    key = key and pageKey(ctx, w, h)
+    if key and not (pend and next(pend)) then
+        for i = #_pages, 1, -1 do if _pages[i].key == key then table.remove(_pages, i) end end
+        c.kept = true
+        table.insert(_pages, 1, { key = key, c = c, clock = c.clock_y ~= nil, minute = minute,
+            nav_for = A.state.nav_for, tabs = A.state.dash_tabs })
+        -- (one let go of is freed by Lua once nothing shows it any more)
+        while #_pages > pagesKeep() do table.remove(_pages).c.kept = nil end
+    end
+    if key and not ctx.ahead then drawAhead(ctx) end
     return c
 end
 
@@ -771,6 +935,7 @@ function Dashboard.on_tap(ctx)
         local tab = A.state.dash_tabs and A.state.dash_tabs[a]
         if not tab then return end
         if A.state.dash_page ~= tab.page then
+            if not pageReady(ctx, tab.page) then tabFeedback(ctx, a) end
             A.state.dash_page = tab.page
             pageTurn(ctx)
         end
