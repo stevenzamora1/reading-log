@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.5.2
+
+- **Starts quicker.** Reading Log keeps its parts compiled in KOReader's
+  cache folder (`koreader/cache/readinglog`, under 1 MB), so after the
+  first start it no longer reads a megabyte of Lua each time KOReader
+  opens: about 25 times quicker to load (roughly a third of a second less
+  on an e-reader). They're made again after an update; errors still name
+  the file and line.
+- **Any font for the cards.** Styles and colours > Font lists every font on
+  your reader, as well as the style's own and your UI font. A font's bold
+  is its family's bold when it has one.
+- Fixed: a style set in a serif (Dark Academia, Forest, Gothic, Ocean,
+  Space) lost its font when put on White, Dark or Paper. The font goes with
+  the style now, whatever its colours.
+- Fixed: on ZenOS, a tapped Dashboard tab could flash and then do nothing.
+  ZenOS sometimes builds its Home again between a tap and the redraw after
+  it, and the redraw went to the card that had just been replaced. It now
+  goes to the one on screen. The tab's flash no longer redraws everything
+  waiting (which could set off that rebuild).
+
 ## 1.5.1
 
 - **A tapped day of the calendar** (the Calendar page, Week in covers) opens

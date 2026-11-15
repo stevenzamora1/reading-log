@@ -496,6 +496,32 @@ function A.colourOptions()
     if not listed then out[#out + 1] = { cur, A.THEMES[cur].label } end
     return out, (own and cur == own) and "style" or cur
 end
+-- Font: the style's serif (a style that has one), your UI font, or any font
+-- on the reader ("font:<file>").
+function A.fontOptions()
+    local out = {}
+    if A.styleSerif() then out[#out + 1] = { "style", T("The style's") } end
+    out[#out + 1] = { "ui", T("Your UI font") }
+    for _, f in ipairs(A.fontChoices()) do out[#out + 1] = { "font:" .. f[1], f[2] } end
+    return out
+end
+function A.fontNow()
+    local f = A.get("style_font", "style")
+    if f == "custom" and A.customFont() then return "font:" .. A.customFont() end
+    if f == "ui" or f == "custom" or not A.styleSerif() then return "ui" end
+    return "style"
+end
+function A.setFont(v)
+    if type(v) == "string" and v:sub(1, 5) == "font:" then
+        A.set("font_file", v:sub(6))
+        A.set("style_font", "custom")
+    elseif v == "ui" then
+        A.set("style_font", "ui")
+    else
+        A.set("style_font", nil)
+    end
+end
+
 function A.setColours(v)
     if v == "style" then v = A.styleThemeId() end
     if v and A.THEMES[v] then A.set("theme", v) end
@@ -1595,13 +1621,10 @@ function S.look(ctx, back, o)
         rows[#rows + 1] = S.header(T("Screen"))
         rows[#rows + 1] = S.radio(api, { { "auto", T("Automatic") }, { "color", T("Colour") }, { "bw", T("Black and white") } },
             A.screenMode(), function(v) A.set("screen_mode", v ~= "auto" and v or nil) end)
-        -- A style set in a serif of its own: it, or the reader's UI font
-        if A.THEMES[A.themeId()].serif then
-            rows[#rows + 1] = S.header(T("Font"))
-            rows[#rows + 1] = S.radio(api, { { "style", T("The style's") }, { "ui", T("Your UI font") } },
-                A.get("style_font", "style") == "ui" and "ui" or "style",
-                function(v) A.set("style_font", v ~= "style" and v or nil) end)
-        end
+        -- The cards' font: the style's own serif (a style that has one, on
+        -- any of its colours), your UI font, or any font on the reader
+        rows[#rows + 1] = S.pick(ctx, api, T("Font"), A.fontOptions(), A.fontNow(),
+            function(v) A.setFont(v); S.reloadAll(ctx) end)
         -- The space around the Dashboard's page
         if o.tools then
         rows[#rows + 1] = S.header(T("Dashboard margin"))

@@ -438,13 +438,8 @@ function S.lookMenu(mctx)
                     end, A.screenMode,
                     function(v) A.set("screen_mode", v ~= "auto" and v or nil) end, after),
             }
-            -- a style set in a serif of its own: it, or the reader's UI font
-            if A.THEMES[A.themeId()].serif then
-                items[#items + 1] = radioItem(T("Font"),
-                    function() return { { "style", T("The style's") }, { "ui", T("Your UI font") } } end,
-                    function() return A.get("style_font", "style") == "ui" and "ui" or "style" end,
-                    function(v) A.set("style_font", v ~= "style" and v or nil) end, after)
-            end
+            -- the cards' font: the style's serif, your UI font, or any font
+            items[#items + 1] = radioItem(T("Font"), A.fontOptions, A.fontNow, A.setFont, after)
             -- a style with its own page colour: it, or the home screen's
             if A.theme().page and A.THEMES[A.themeId()].own then
                 items[#items + 1] = radioItem(T("Behind the Dashboard's cards"),

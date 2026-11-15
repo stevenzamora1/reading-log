@@ -769,8 +769,14 @@ local function tabFeedback(ctx, i)
         local Geom = require("ui/geometry")
         local g = Geom:new{ x = floor(d.x + r.x), y = floor(d.y + r.y), w = floor(r.w), h = floor(r.h) }
         Screen.bb:invertRect(g.x, g.y, g.w, g.h)
-        UIManager:setDirty(nil, "fast", g)
-        UIManager:forceRePaint()
+        -- put just that onto the screen, now (not through a repaint of
+        -- everything waiting: on ZenOS that could build its Home again in
+        -- the middle of the tap, page and all)
+        if Screen.refreshFast then
+            Screen:refreshFast(g.x, g.y, g.w, g.h)
+        else
+            UIManager:setDirty(nil, "fast", g)
+        end
     end)
 end
 

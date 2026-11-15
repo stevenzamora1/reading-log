@@ -47,6 +47,7 @@ local Box = InputContainer:extend{
     hold_extra = nil,  -- function(box, rows, close) adding buttons to the long-press menu
     on_refresh = nil,  -- function(box, kind, region): put a redraw on screen
     alive = nil,       -- function(box) -> still on screen?
+    successor = nil,   -- function() -> the card built since in its place (ZenOS)
     pass_top = false,  -- on a home screen: leave taps in KOReader's menu zone (the top of the screen) to it
 }
 
@@ -160,7 +161,15 @@ end
 ---   o.strip  { y, h }: only this band changed (the clock)
 function Box:repaint(o)
     o = o or {}
-    if not self:isActive() then return end
+    if not self:isActive() then
+        -- ZenOS can build its Home again between a tap and the redraw that
+        -- follows it (it lets go of pictures and makes them again): the card
+        -- that was tapped is then gone from the screen and its replacement,
+        -- built a moment earlier, still shows the old page. Redraw that one.
+        local nb = self.successor and self.successor()
+        if nb and nb ~= self and nb.isActive and nb:isActive() then return nb:repaint(o) end
+        return
+    end
     self:build()
     local d = self.dimen
     local region = d and Geom:new{ x = d.x, y = d.y, w = d.w, h = d.h } or nil
@@ -484,6 +493,7 @@ local function zenBuilder(name)
                 end or nil,
             },
             alive = function(b) return _zen_latest[name] == b and homeShown() end,
+            successor = function() return _zen_latest[name] end,
             on_refresh = function(b, kind, region)
                 if type(zctx.refreshRow) ~= "function" then error("no refreshRow") end
                 -- Zen repaints the Home and puts it on screen in one go; a

@@ -589,7 +589,7 @@ Long-press any card for its settings (in Bookshelf, **Module settings**):
   when it has some, or White, Dark or Paper), two accent colours (sixteen
   colours, or four shades of grey), the **Screen** (Automatic, Colour, or
   Black and white, which keeps the pickers to shades of grey), the **Font**
-  with a serif style (the style's, or your UI font), and how cards look on
+  (a serif style's own, your UI font, or any font on your reader), and how cards look on
   their own (matching the home screen or framed in the colours, with
   Default or Cute). The day the week starts on
   is in Tools > Reading Log > **Your reading**.

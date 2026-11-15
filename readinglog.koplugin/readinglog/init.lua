@@ -39,7 +39,7 @@ its box with a rounded panel and draws on that.
 local HOST_KIND = ...
 if HOST_KIND ~= "bookshelf" then HOST_KIND = "simpleui" end
 
-local A = { VERSION = "1.5.1", NAME = "Reading Log" }
+local A = { VERSION = "1.5.2", NAME = "Reading Log" }
 A.HOST_KIND = HOST_KIND
 A.HOST = HOST_KIND == "bookshelf" and "Bookshelf" or "Simple UI"
 
@@ -365,11 +365,99 @@ function A.academiaTheme()
     return A.THEMES[A.themeId()].ruled and A.academia() or nil
 end
 
--- Whether the theme sets its cards in a serif (Dark Academia).
+-- Whether the style is set in a serif of its own (Dark Academia, and the
+-- downloaded styles that say so). It goes with the style, not its colours:
+-- Forest on White is still Forest. (Worked out once per settings change.)
+local _serif = {}
+function A.styleSerif()
+    if _serif.epoch == A.epoch then return _serif.v end
+    local v = A.THEMES[A.themeId()].serif and true or false
+    if not v and A.styleThemeId then
+        local ok, own = pcall(A.styleThemeId)
+        if ok and own and A.THEMES[own] and A.THEMES[own].serif then v = true end
+    end
+    _serif = { epoch = A.epoch, v = v }
+    return v
+end
+
+-- Whether the cards are set in the style's serif now: the reader can keep
+-- their own UI font, or pick another (Styles and colours > Font).
 function A.serifTheme()
-    -- (the reader can keep their own UI font: Styles and colours > Font)
-    if A.get("style_font", "style") == "ui" then return false end
-    return A.THEMES[A.themeId()].serif and true or false
+    local f = A.get("style_font", "style")
+    if f == "ui" or f == "custom" then return false end
+    return A.styleSerif()
+end
+
+-- ─── a font of the reader's choosing ─────────────────────────────────────
+-- Styles and colours > Font > Another font: any font on the reader, for
+-- every card's text (the clock's digits and symbols keep theirs). Its bold
+-- is the same family's bold when it has one, else drawn bolder.
+
+-- The fonts to choose from: one per family, its regular face, by name.
+-- { { file, name }, ... }
+function A.fontChoices()
+    local ok, FontList = pcall(require, "fontlist")
+    if not ok or not FontList then return {} end
+    pcall(FontList.getFontList, FontList)
+    local fams = {}
+    for file, faces in pairs(FontList.fontinfo or {}) do
+        local f = type(faces) == "table" and faces[1]
+        -- (not the symbol and emoji fonts KOReader keeps for its icons)
+        local symbols = f and f.name and (file:find("nerdfonts", 1, true)
+            or f.name:find("Nerd Font", 1, true) or f.name:find("Symbol") or f.name:find("Emoji"))
+        if f and f.name and not f.italic and not symbols then
+            local cur = fams[f.name]
+            -- the regular face of a family, else whatever it has
+            if not cur or (cur.bold and not f.bold) then fams[f.name] = { file = file, bold = f.bold, name = f.name } end
+        end
+    end
+    local out = {}
+    for name, f in pairs(fams) do out[#out + 1] = { f.file, name } end
+    table.sort(out, function(x, y) return x[2]:lower() < y[2]:lower() end)
+    return out
+end
+
+-- The bold face of the family `file` belongs to, or nil.
+local _boldOf = {}
+local function boldOf(file)
+    if _boldOf[file] ~= nil then return _boldOf[file] or nil end
+    local found = false
+    local ok, FontList = pcall(require, "fontlist")
+    local info = ok and FontList and FontList.fontinfo or {}
+    local mine = info[file] and info[file][1]
+    if mine and mine.name then
+        for f, faces in pairs(info) do
+            local x = type(faces) == "table" and faces[1]
+            if x and x.name == mine.name and x.bold and not x.italic then found = f break end
+        end
+    end
+    _boldOf[file] = found
+    return found or nil
+end
+
+-- The font picked, if it's on: its file (still on the reader), else nil.
+local _custom = {}
+function A.customFont()
+    if _custom.epoch == A.epoch then return _custom.v end
+    local v
+    if A.get("style_font", "style") == "custom" then
+        local file = A.get("font_file", nil)
+        if type(file) == "string" and file ~= "" then
+            local lfs = require("libs/libkoreader-lfs")
+            if lfs.attributes(file, "mode") == "file" then v = file end
+        end
+    end
+    _custom = { epoch = A.epoch, v = v }
+    return v
+end
+
+-- The name shown for the font picked.
+function A.customFontName()
+    local file = A.get("font_file", nil)
+    if type(file) ~= "string" then return nil end
+    local ok, FontList = pcall(require, "fontlist")
+    local f = ok and FontList and FontList.fontinfo and FontList.fontinfo[file]
+    return (f and f[1] and f[1].name) or file:match("([^/]+)%.[^.]+$") or file
 end
 
 -- The colour of the page the panel sits on (Simple UI's background, or
@@ -1555,6 +1643,16 @@ function A.face(px, o)
         local ok, face = pcall(getFace, Font, "FreeSerif.ttf", dp(px))
         if ok and face then return face, false end
     end
+    if not o.mono and not o.symbol and not o.serif then
+        local file = A.customFont()
+        if file then
+            local Font = require("ui/font")
+            local getFace = A.host.nativeGetFace() or Font.getFace
+            local bf = o.bold and boldOf(file) or nil
+            local ok, face = pcall(getFace, Font, bf or file, dp(px))
+            if ok and face then return face, (o.bold and not bf) and true or false end
+        end
+    end
     if o.serif or (not o.mono and not o.symbol and not o.sans and A.serifTheme()) then
         local Font = require("ui/font")
         local name = o.bold and "NotoSerif-Bold.ttf" or (o.italic and "NotoSerif-Italic.ttf" or "NotoSerif-Regular.ttf")
@@ -2447,8 +2545,70 @@ end
 
 -- ─── load the other parts ────────────────────────────────────────────────────
 
+-- Each part is kept compiled in KOReader's cache folder (cache/readinglog),
+-- so later starts skip reading the Lua: about 25 times quicker to load, the
+-- difference between a third of a second and next to nothing on an
+-- e-reader. The compiled copy keeps the line numbers, so errors read the
+-- same. It is made again whenever the file changes (an update), and the
+-- Lua itself is read whenever the copy can't be used.
+local _bc_dir
+local function bcDir()
+    if _bc_dir ~= nil then return _bc_dir end
+    _bc_dir = false
+    pcall(function()
+        local lfs = require("libs/libkoreader-lfs")
+        local base = require("datastorage"):getDataDir() .. "/cache"
+        local dir = base .. "/readinglog"
+        if lfs.attributes(base, "mode") ~= "directory" then lfs.mkdir(base) end
+        if lfs.attributes(dir, "mode") ~= "directory" then lfs.mkdir(dir) end
+        if lfs.attributes(dir, "mode") == "directory" then _bc_dir = dir end
+    end)
+    return _bc_dir
+end
+
+local function loadPart(name)
+    local src = A.dir .. "/" .. name .. ".lua"
+    local dir = bcDir()
+    local key
+    if dir then
+        pcall(function()
+            local lfs = require("libs/libkoreader-lfs")
+            local at = lfs.attributes(src)
+            -- (the file's size and time, and the Lua it was made by)
+            local jv = (rawget(_G, "jit") and jit.version or "lua"):gsub("[^%w%.]", "")
+            if at then key = string.format("%s/%s-%d-%d-%s.bc", dir, name:gsub("/", "_"), at.size, at.modification, jv) end
+        end)
+    end
+    if key then
+        local chunk = loadfile(key)
+        if chunk then return chunk end
+    end
+    local chunk, err = loadfile(src)
+    if not chunk then return nil, err end
+    if key then
+        pcall(function()
+            local lfs = require("libs/libkoreader-lfs")
+            -- the copies made for earlier versions of this part go
+            local prefix = name:gsub("/", "_") .. "-"
+            local old = {}
+            for f in lfs.dir(dir) do
+                if f:sub(1, #prefix) == prefix and f:sub(-3) == ".bc" then old[#old + 1] = dir .. "/" .. f end
+            end
+            for _, f in ipairs(old) do os.remove(f) end
+            local tmp = key .. ".tmp"
+            local fh = io.open(tmp, "wb")
+            if fh then
+                fh:write(string.dump(chunk))
+                fh:close()
+                os.rename(tmp, key)
+            end
+        end)
+    end
+    return chunk
+end
+
 local function part(name)
-    local chunk, err = loadfile(A.dir .. "/" .. name .. ".lua")
+    local chunk, err = loadPart(name)
     if not chunk then error("almanac: cannot load " .. name .. ".lua: " .. tostring(err)) end
     return chunk(A)
 end
